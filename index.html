@@ -177,6 +177,8 @@
             </div>
           </details>
 
+          <button class="btn btn-secondary btn-launch btn-simulate" id="simulateSessionBtn" type="button">📊 Simuler la séance</button>
+          <div class="simulation-panel hidden" id="simulationPanel"></div>
           <button class="btn btn-primary btn-launch" id="launchTournamentBtn" type="submit">▶ Lancer le tournoi</button>
         </form>
       </section>
@@ -239,7 +241,7 @@
         <div class="footer-actions split">
           <button class="btn btn-secondary btn-lg" id="prevRotationBtn" type="button">← Rotation précédente</button>
           <button class="btn btn-secondary btn-lg" id="saveSessionBtn" type="button">💾 Sauvegarder</button>
-          <button class="btn btn-primary btn-lg" id="nextRotationBtn" type="button">Rotation suivante →</button>
+          <button class="btn btn-primary btn-lg" id="nextRotationBtn" type="button">Rotation suivante + reset chrono</button>
         </div>
         <div style="margin-top:12px;">
           <button class="btn btn-secondary btn-lg" id="finishTournamentBtn" type="button" style="width:100%;background:#fee2e2;color:#991b1b;">🏁 Terminer le tournoi</button>
@@ -295,7 +297,7 @@
       <div class="help-modal-panel">
         <div class="help-hero">
           <div class="help-hero-copy">
-            <p class="help-hero-kicker">Coach EPS</p>
+            <p class="help-hero-kicker">EPS Tournoi</p>
             <h3>Bienvenue dans EPS Tournoi</h3>
             <p>Organisez votre séance en quelques minutes 🏆</p>
           </div>
@@ -325,7 +327,7 @@
           <span class="help-tip-pill tip-green">💡 Astuce EPS</span>
           <span class="help-tip-pill tip-orange">🔥 Gain de temps</span>
           <span class="help-tip-pill tip-blue">📱 Idéal sur tablette</span>
-          <span class="help-tip-pill tip-cyan">🏫 Parfait pour vidéo-projecteur</span>
+          <span class="help-tip-pill tip-cyan">🏫 Compatible grand écran</span>
         </div>
 
         <div class="help-faq">
@@ -360,8 +362,8 @@
             <div class="help-card-body"><div><p>Les gagnants montent, les perdants descendent. Une fois les scores validés, l’ordre des terrains est recalculé pour créer la rotation suivante.</p></div></div>
           </details>
           <details class="help-card">
-            <summary><span class="help-card-icon">📺</span><span>Comment projeter / imprimer ?</span></summary>
-            <div class="help-card-body"><div><p>Une fois la séance terminée, vous pouvez afficher les statistiques finales puis utiliser les actions d’impression ou d’export CSV pour partager les résultats.</p></div></div>
+            <summary><span class="help-card-icon">📺</span><span>Comment imprimer ou afficher sur grand écran ?</span></summary>
+            <div class="help-card-body"><div><p>Cette version ne propose pas de vue projection dédiée. Pour un grand écran, affichez simplement l’app dans le navigateur. En fin de séance, utilisez ensuite l’impression ou l’export CSV pour partager les résultats.</p></div></div>
           </details>
           <details class="help-card">
             <summary><span class="help-card-icon">🧑‍⚖️</span><span>Que faire si un élève est absent ou indisponible ?</span></summary>

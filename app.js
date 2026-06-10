@@ -107,6 +107,31 @@ function uniqueId(prefix = 'id') {
   return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 10)}`;
 }
 
+function cloneData(value) {
+  if (value === undefined) return undefined;
+  if (typeof globalThis !== 'undefined' && typeof globalThis.structuredClone === 'function') {
+    return globalThis.structuredClone(value);
+  }
+  return JSON.parse(JSON.stringify(value));
+}
+
+function addListenerIfPresent(element, eventName, handler, options) {
+  if (!element) return false;
+  element.addEventListener(eventName, handler, options);
+  return true;
+}
+
+function isTeamSession(session) {
+  return session?.sport === 'sport-co' && session?.format !== 'rotating-teams';
+}
+
+function getParticipantLabel(session, count = 2) {
+  const plural = count !== 1;
+  if (isTeamSession(session)) return plural ? 'Équipes' : 'Équipe';
+  if (session?.sport === 'raquette') return plural ? 'Joueurs' : 'Joueur';
+  return plural ? 'Élèves' : 'Élève';
+}
+
 function parseTime(value) {
   if (!value) return null;
   const [hours, minutes] = value.split(':').map(Number);
@@ -125,8 +150,8 @@ function getAvailableWindow(options) {
   const start = parseTime(options.startTime);
   const end = parseTime(options.endTime);
   if (start == null || end == null) return { availableMinutes: null };
-  let diff = end - start;
-  if (diff < 0) diff += 24 * 60;
+  const diff = end - start;
+  if (diff < 0) return { availableMinutes: null, invertedWarning: true };
   return { availableMinutes: diff };
 }
 
@@ -254,23 +279,41 @@ function getCurrentFormatDefinition() {
   return found || FORMAT_DEFINITIONS[sport][0];
 }
 
+function isTeamBasedSource(source) {
+  return source?.sport === 'sport-co' && source?.format !== 'rotating-teams';
+}
+
 function isTeamBasedDraft() {
-  return state.draft.sport === 'sport-co' && state.draft.format !== 'rotating-teams';
+  return isTeamBasedSource(state.draft);
+}
+
+function getSelectedConfigurationForSource(source = state.draft) {
+  if (!isTeamBasedSource(source)) return null;
+  const suggestions = getSuggestedTeamConfigurations(source.participantCount);
+  if (!suggestions.length) return null;
+  return suggestions.find(entry => entry.key === source.selectedConfigKey) || suggestions[0];
 }
 
 function getSelectedConfiguration() {
-  if (!isTeamBasedDraft()) return null;
-  const suggestions = getSuggestedTeamConfigurations(state.draft.participantCount);
-  if (!suggestions.length) return null;
-  const selected = suggestions.find(entry => entry.key === state.draft.selectedConfigKey) || suggestions[0];
+  const selected = getSelectedConfigurationForSource(state.draft);
+  if (!selected) return null;
   state.draft.selectedConfigKey = selected.key;
   return selected;
+}
+
+function buildDefaultTeamNameSuggestions(count) {
+  return TEAM_COLOR_SUGGESTIONS.slice(0, count).concat(
+    Array.from(
+      { length: Math.max(0, count - TEAM_COLOR_SUGGESTIONS.length) },
+      (_, index) => `Équipe ${TEAM_COLOR_SUGGESTIONS.length + index + 1}`
+    )
+  );
 }
 
 function getDraftTeamNames(config) {
   const count = config?.teamCount || 0;
   const defaults = ensureTeamListLength(
-    TEAM_COLOR_SUGGESTIONS.slice(0, count).concat(Array.from({ length: Math.max(0, count - TEAM_COLOR_SUGGESTIONS.length) }, (_, index) => `Équipe ${TEAM_COLOR_SUGGESTIONS.length + index + 1}`)),
+    buildDefaultTeamNameSuggestions(count),
     count,
     'Équipe'
   );
@@ -279,8 +322,24 @@ function getDraftTeamNames(config) {
   return state.draft.teamNames;
 }
 
+function getDraftTeamNamesForSource(source, config) {
+  const count = config?.teamCount || 0;
+  if (!count) return [];
+  const defaults = ensureTeamListLength(buildDefaultTeamNameSuggestions(count), count, 'Équipe');
+  const current = Array.isArray(source?.teamNames) && source.teamNames.length ? source.teamNames : defaults;
+  return ensureTeamListLength(current, count, 'Équipe');
+}
+
 function getDraftStudentNames(count) {
   const typed = parseNames(state.draft.studentNamesText);
+  if (!typed.length) {
+    return ensureTeamListLength([], count, 'Élève');
+  }
+  return ensureTeamListLength(typed, count, 'Élève');
+}
+
+function getDraftStudentNamesForSource(source, count) {
+  const typed = parseNames(source?.studentNamesText);
   if (!typed.length) {
     return ensureTeamListLength([], count, 'Élève');
   }
@@ -369,7 +428,7 @@ function assembleSchedule(entries, teams, options, metaExtras) {
         endLabel,
         matches: preparedMatches,
         byes: [...(entry.byes || [])],
-        byeAssignments: Array.isArray(entry.byeAssignments) ? structuredClone(entry.byeAssignments) : [],
+        byeAssignments: Array.isArray(entry.byeAssignments) ? cloneData(entry.byeAssignments) : [],
       });
       rotationNumber += 1;
       if (clock != null) {
@@ -1279,7 +1338,7 @@ function buildGroupedSchedule(groups, allTeams, options, extras = {}) {
           groupLabel: entry.groupLabel || null,
           matches: entry.matches.map(match => ({ ...match })),
           byes: [...(entry.byes || [])],
-          byeAssignments: Array.isArray(entry.byeAssignments) ? structuredClone(entry.byeAssignments) : [],
+          byeAssignments: Array.isArray(entry.byeAssignments) ? cloneData(entry.byeAssignments) : [],
         }, fieldCount, enabledRoles)
       : [{
           number: rotationNumber,
@@ -1289,7 +1348,7 @@ function buildGroupedSchedule(groups, allTeams, options, extras = {}) {
           groupLabel: entry.groupLabel || null,
           matches: entry.matches.map(match => ({ ...match })),
           byes: [...(entry.byes || [])],
-          byeAssignments: Array.isArray(entry.byeAssignments) ? structuredClone(entry.byeAssignments) : [],
+          byeAssignments: Array.isArray(entry.byeAssignments) ? cloneData(entry.byeAssignments) : [],
         }];
     waves.forEach(wave => {
       const startLabel = clock == null ? '' : formatTimeLabel(clock);
@@ -1390,7 +1449,7 @@ function buildGroupPoolsRaquetteSchedule(teams, options) {
       groupLabel: entry.groupLabel || null,
       matches: entry.matches.map(match => ({ ...match })),
       byes: [...(entry.byes || [])],
-      byeAssignments: Array.isArray(entry.byeAssignments) ? structuredClone(entry.byeAssignments) : [],
+      byeAssignments: Array.isArray(entry.byeAssignments) ? cloneData(entry.byeAssignments) : [],
     }, fieldCount, enabledRoles);
     waves.forEach(wave => {
       const startLabel = clock == null ? '' : formatTimeLabel(clock);
@@ -1708,6 +1767,7 @@ function initializeSwissMode(teams, options) {
     points: 0,
     matches: 0,
     wins: 0,
+    draws: 0,
     losses: 0,
     bye: 0,
     opponents: [],
@@ -2029,7 +2089,12 @@ function loadStoredSessions() {
 }
 
 function saveStoredSessions(entries) {
-  localStorage.setItem(SESSIONS_KEY, JSON.stringify(entries));
+  try {
+    localStorage.setItem(SESSIONS_KEY, JSON.stringify(entries));
+  } catch (error) {
+    console.error('[EPS Tournoi] Impossible de sauvegarder les séances (quota dépassé ?)', error);
+    window.alert('Espace de stockage plein. Exportez vos séances depuis la liste des séances pour libérer de la place.');
+  }
 }
 
 function loadClassrooms() {
@@ -2073,8 +2138,8 @@ function buildAppSaveSnapshot(session = state.currentSession) {
     sport: session.sport,
     format: session.format,
     teams: [...session.teams],
-    schedule: structuredClone(session.schedule),
-    scores: structuredClone(session.scores),
+    schedule: cloneData(session.schedule),
+    scores: cloneData(session.scores),
     currentRotation: session.currentRotation,
     options: { ...session.options },
     timer: {
@@ -2087,7 +2152,7 @@ function buildAppSaveSnapshot(session = state.currentSession) {
     classroomId: session.classroomId || null,
     classroomName: session.classroomName || null,
     challengeOrder: session.challengeOrder ? [...session.challengeOrder] : undefined,
-    challengeLog: session.challengeLog ? structuredClone(session.challengeLog) : undefined,
+    challengeLog: session.challengeLog ? cloneData(session.challengeLog) : undefined,
   };
 }
 
@@ -2291,8 +2356,8 @@ function computeTeamStandings(session, options = {}) {
     const bestAttack = Math.max(...ranking.map(row => row.pointsFor));
     const bestDefense = Math.min(...ranking.map(row => row.pointsAgainst));
     ranking.forEach(row => {
-      if (row.pointsFor === bestAttack) row.badges.push('Meilleure attaque');
-      if (row.pointsAgainst === bestDefense) row.badges.push('Meilleure défense');
+      if (bestAttack > 0 && row.pointsFor === bestAttack) row.badges.push('Meilleure attaque');
+      if (row.played > 0 && row.pointsAgainst === bestDefense) row.badges.push('Meilleure défense');
     });
   }
   return ranking;
@@ -2430,7 +2495,7 @@ function computeStandings(session) {
         losses,
         draws,
         played,
-        points: wins,
+        points: wins * 3 + draws,
         pointsFor: totalFor,
         pointsAgainst: totalAgainst,
         goalDiff: totalFor - totalAgainst,
@@ -2619,17 +2684,21 @@ function renderTimeSection() {
   dom.matchDurationLabel.textContent = `${state.draft.duration} min`;
   const config = getSelectedConfiguration();
   const effectiveCount = isTeamBasedDraft() && config ? config.teamCount : state.draft.participantCount;
-  const availableWindow = getAvailableWindow(state.draft).availableMinutes;
+  const windowResult = getAvailableWindow(state.draft);
+  const availableMinutes = windowResult.availableMinutes;
+  const isInverted = windowResult.invertedWarning;
   const rotationEstimate = getEstimatedRotationCount(effectiveCount, state.draft.fields, {
     teamBased: isTeamBasedDraft(),
   });
-  const suggestedDuration = getSuggestedDurationFromWindow(availableWindow, rotationEstimate, state.draft.duration);
-  const slotLabel = availableWindow == null
+  const suggestedDuration = getSuggestedDurationFromWindow(availableMinutes, rotationEstimate, state.draft.duration);
+  const slotLabel = availableMinutes == null
     ? `${state.draft.duration} min par match`
-    : `${availableWindow} min · Durée suggérée : ${suggestedDuration} min/match · ${rotationEstimate} rotations`;
-  dom.timingSummary.innerHTML = availableWindow == null
-    ? `<strong>Durée</strong> : ${slotLabel}`
-    : `<strong>Créneau</strong> : ${slotLabel}`;
+    : `${availableMinutes} min · Durée suggérée : ${suggestedDuration} min/match · ${rotationEstimate} rotations`;
+  dom.timingSummary.innerHTML = isInverted
+    ? `<strong style="color:#c2410c;">⚠️ Heure de fin antérieure à l'heure de début — vérifiez le créneau.</strong>`
+    : availableMinutes == null
+      ? `<strong>Durée</strong> : ${slotLabel}`
+      : `<strong>Créneau</strong> : ${slotLabel}`;
 }
 
 function renderNewTournamentView() {
@@ -2655,26 +2724,262 @@ function renderNewTournamentView() {
     if (dom.poolSizeInput) dom.poolSizeInput.value = state.draft.poolSize;
     if (dom.poolSizeLabel) dom.poolSizeLabel.textContent = `${state.draft.poolSize}`;
   }
+  hideSimulationPanel();
 }
 
 function buildLaunchOptions() {
-  const config = getSelectedConfiguration();
-  const options = {
-    sport: state.draft.sport,
-    format: state.draft.format,
-    fields: state.draft.fields,
-    startTime: state.draft.startTime,
-    endTime: state.draft.endTime,
-    duration: state.draft.duration,
-    practiceType: state.draft.sport === 'raquette' ? 'raquette' : state.draft.format === 'rotating-teams' ? 'eleve' : 'sport-co',
+  return buildOptionsFromDraft(state.draft);
+}
+
+function buildOptionsFromDraft(source = state.draft) {
+  const config = getSelectedConfigurationForSource(source);
+  return {
+    sport: source.sport === 'raquette' ? 'raquette' : 'sport-co',
+    format: source.format,
+    fields: clampNumber(Number(source.fields) || 2, 1, 20, 2),
+    startTime: source.startTime || '10:00',
+    endTime: source.endTime || '11:00',
+    duration: clampNumber(Number(source.duration) || 7, 1, 60, 7),
+    practiceType: source.sport === 'raquette' ? 'raquette' : source.format === 'rotating-teams' ? 'eleve' : 'sport-co',
     teamSize: config?.teamSize || 3,
     organization: 'pools',
-    rotatingReferee: Boolean(state.draft.rotatingReferee),
-    scoreTable: Boolean(state.draft.scoreTable),
-    challengeRange: state.draft.challengeRange || 5,
-    poolSize: state.draft.poolSize || 4,
+    rotatingReferee: Boolean(source.rotatingReferee),
+    scoreTable: Boolean(source.scoreTable),
+    challengeRange: clampNumber(Number(source.challengeRange) || 5, 1, 10, 5),
+    poolSize: clampNumber(Number(source.poolSize) || 4, 3, 6, 4),
   };
-  return options;
+}
+
+function getActivityLabel(source = state.draft) {
+  return source?.sport === 'raquette' ? 'Raquettes' : 'Sports collectifs';
+}
+
+function getFormatLabelFromSource(source = state.draft) {
+  return TOURNAMENT_MODES[source?.format]?.label || source?.format || 'Tournoi';
+}
+
+function getSimulationRating(score) {
+  const clamped = clampNumber(Number(score) || 1, 1, 5, 1);
+  const labels = {
+    5: 'Configuration très fluide',
+    4: 'Configuration fluide',
+    3: 'Configuration correcte',
+    2: 'Configuration peu efficace',
+    1: 'Configuration déconseillée',
+  };
+  return {
+    score: clamped,
+    label: labels[clamped],
+    stars: `${'★'.repeat(clamped)}${'☆'.repeat(5 - clamped)}`,
+  };
+}
+
+function createTeamsForDraft(source, options) {
+  const config = getSelectedConfigurationForSource(source);
+  if (options.sport === 'sport-co' && options.format !== 'rotating-teams') {
+    const teamCount = config?.teamCount || 4;
+    return getDraftTeamNamesForSource(source, config || { teamCount });
+  }
+  const count = clampSetupCount(source?.participantCount, 24);
+  return getDraftStudentNamesForSource(source, count);
+}
+
+function buildSimulationReport(source = state.draft) {
+  const draft = {
+    ...createDefaultDraft(),
+    ...(source || {}),
+  };
+  const options = buildOptionsFromDraft(draft);
+  const teams = createTeamsForDraft(draft, options);
+  const teamBased = isTeamBasedSource(draft);
+  const unitCount = teams.length;
+  const availableWindowResult = getAvailableWindow(draft);
+  const availableMinutes = availableWindowResult.availableMinutes;
+  const invertedWarning = Boolean(availableWindowResult.invertedWarning);
+  const possibleRotations = availableMinutes == null ? null : Math.max(0, Math.floor(availableMinutes / Math.max(options.duration, 1)));
+  const simultaneousUnits = Math.min(unitCount, Math.max(1, options.fields) * 2);
+  const waitingUnits = Math.max(unitCount - simultaneousUnits, 0);
+  let schedule = null;
+  let scheduleError = null;
+  try {
+    schedule = generateSchedule(teams, options);
+  } catch (error) {
+    scheduleError = error;
+  }
+  const requiredRotations = schedule
+    ? (schedule.format === 'challenge'
+      ? getEstimatedRotationCount(unitCount, options.fields, { teamBased })
+      : (schedule.meta?.rotationCount || schedule.rotations?.length || 0))
+    : getEstimatedRotationCount(unitCount, options.fields, { teamBased });
+
+  const alerts = [];
+  const recommendations = [];
+  let ratingScore = 5;
+
+  if (invertedWarning) {
+    alerts.push({ level: 'error', text: 'Heure de fin antérieure à l’heure de début : vérifiez le créneau.' });
+    ratingScore = 1;
+  }
+  if (availableMinutes != null && options.duration > availableMinutes) {
+    alerts.push({ level: 'error', text: 'La durée d’un match est supérieure au créneau disponible.' });
+    ratingScore = 1;
+  }
+  if (possibleRotations === 0) {
+    alerts.push({ level: 'error', text: '0 rotation possible avec ce créneau et cette durée de match.' });
+    ratingScore = 1;
+  }
+  if (availableMinutes != null && possibleRotations !== null && possibleRotations < requiredRotations && draft.format !== 'challenge') {
+    alerts.push({ level: 'warning', text: `Créneau court pour ce format : environ ${possibleRotations} rotation(s) possibles pour ${requiredRotations} attendue(s).` });
+    ratingScore -= possibleRotations <= Math.floor(requiredRotations / 2) ? 2 : 1;
+  }
+  if (waitingUnits > Math.ceil(unitCount / 3)) {
+    alerts.push({ level: 'warning', text: teamBased
+      ? 'Beaucoup d’équipes restent en attente : envisagez plus de terrains, des matchs plus courts ou un autre format.'
+      : 'Beaucoup d’élèves restent en attente : prévoyez repos actif, observation ou davantage de terrains.' });
+    ratingScore -= waitingUnits > Math.ceil(unitCount / 2) ? 2 : 1;
+  }
+  if (options.rotatingReferee && waitingUnits < options.fields) {
+    alerts.push({ level: 'warning', text: teamBased
+      ? 'Arbitre activé mais pas assez d’équipes au repos pour 1 arbitre par terrain : prévoir arbitrage croisé.'
+      : 'Arbitre tournant activé mais pas assez d’élèves disponibles pour 1 arbitre par terrain.' });
+    ratingScore -= 1;
+  }
+  if (options.scoreTable && waitingUnits === 0) {
+    alerts.push({ level: 'warning', text: teamBased
+      ? 'Table de marque activée sans équipe au repos : prévoir une équipe non concernée ou l’enseignant.'
+      : 'Table de marque activée sans élève disponible : prévoir un responsable externe à la rotation.' });
+    ratingScore -= 1;
+  }
+  if (scheduleError) {
+    alerts.push({ level: 'warning', text: 'Cette configuration est difficile à organiser automatiquement avec le moteur actuel.' });
+    ratingScore -= 1;
+  }
+
+  if (teamBased) {
+    recommendations.push(
+      waitingUnits > 0
+        ? 'Si une équipe est au repos, elle peut aider pour l’arbitrage ou la table.'
+        : (options.rotatingReferee
+          ? 'Aucune équipe au repos : prévoir arbitrage croisé ou arbitres issus des équipes non concernées.'
+          : 'Toutes les équipes peuvent jouer simultanément sur cette rotation.')
+    );
+    if (waitingUnits > 1) {
+      recommendations.push('Si trop d’équipes attendent, ajoutez des terrains, réduisez la durée ou choisissez un format plus léger.');
+    }
+  } else {
+    if (waitingUnits > 0) {
+      recommendations.push(`${waitingUnits} élève${waitingUnits > 1 ? 's restent' : ' reste'} disponible${waitingUnits > 1 ? 's' : ''} : arbitres, observateurs, repos actif.`);
+    } else {
+      recommendations.push('Tous les élèves peuvent être engagés immédiatement : peu de marge pour des rôles externes.');
+    }
+    if (options.rotatingReferee && waitingUnits >= options.fields) {
+      recommendations.push('1 arbitre par terrain possible si vous voulez sécuriser la rotation.');
+    }
+    if (options.scoreTable) {
+      recommendations.push('Prévoyez 1 responsable classement / saisie scores.');
+    }
+    if (draft.participantCount % 2 === 1) {
+      recommendations.push('Nombre impair : proposer automatiquement un rôle actif au joueur non engagé.');
+    }
+    if (draft.format === 'challenge') {
+      recommendations.push(`Défi : la plage actuelle est de ±${options.challengeRange} rang${options.challengeRange > 1 ? 's' : ''}.`);
+    }
+    if (draft.format === 'groups-pools') {
+      recommendations.push(`Poules prévues par groupes de ${options.poolSize}.`);
+    }
+  }
+
+  const waitingRatio = unitCount ? waitingUnits / unitCount : 1;
+  if (waitingRatio > 0.45) ratingScore -= 1;
+  if (options.fields <= 1 && unitCount > 6) ratingScore -= 1;
+  if (possibleRotations !== null && possibleRotations >= requiredRotations && waitingRatio <= 0.2 && !invertedWarning) {
+    ratingScore = Math.max(ratingScore, 4);
+  }
+  if (possibleRotations !== null && possibleRotations >= requiredRotations + 2 && waitingRatio <= 0.1 && !invertedWarning) {
+    ratingScore = 5;
+  }
+
+  return {
+    activityLabel: getActivityLabel(draft),
+    formatLabel: getFormatLabelFromSource(draft),
+    unitCount,
+    participantCount: clampSetupCount(draft.participantCount, 24),
+    unitLabel: teamBased ? 'équipes' : 'élèves',
+    fields: options.fields,
+    availableMinutes,
+    duration: options.duration,
+    possibleRotations,
+    requiredRotations,
+    activeLabel: teamBased
+      ? `${simultaneousUnits} équipe${simultaneousUnits > 1 ? 's peuvent' : ' peut'} jouer simultanément.`
+      : `${simultaneousUnits} joueur${simultaneousUnits > 1 ? 's peuvent' : ' peut'} jouer simultanément.`,
+    waitingLabel: teamBased
+      ? `${waitingUnits} équipe${waitingUnits > 1 ? 's au repos.' : ' au repos.'}`
+      : (waitingUnits > 0
+        ? `${waitingUnits} élève${waitingUnits > 1 ? 's restent' : ' reste'} disponible${waitingUnits > 1 ? 's' : ''} : arbitres, observateurs, repos actif.`
+        : '0 élève disponible hors jeu.'),
+    recommendations,
+    alerts,
+    rating: getSimulationRating(ratingScore),
+    teamBased,
+  };
+}
+
+function renderSimulationPanel(report) {
+  if (!dom.simulationPanel || !report) return report;
+  const countLabel = `${report.unitCount} ${report.unitLabel}`;
+  const windowLabel = report.availableMinutes == null ? 'Créneau à vérifier' : `${report.availableMinutes} min`;
+  const rotationsLabel = report.possibleRotations == null
+    ? 'Rotations possibles : créneau à vérifier.'
+    : `Environ ${report.possibleRotations} rotation${report.possibleRotations > 1 ? 's' : ''} possible${report.possibleRotations > 1 ? 's' : ''}.`;
+  const alertsHtml = report.alerts.map(entry => `
+    <div class="simulation-alert simulation-alert--${entry.level}">${escapeHtml(entry.text)}</div>
+  `).join('');
+  const recommendationsHtml = report.recommendations.map(entry => `<li>${escapeHtml(entry)}</li>`).join('');
+  dom.simulationPanel.innerHTML = `
+    <div class="simulation-panel-card">
+      <div class="simulation-panel-head">
+        <div>
+          <p class="simulation-kicker">📊 Analyse rapide de la séance</p>
+          <h3>${escapeHtml(report.activityLabel)} · ${escapeHtml(report.formatLabel)}</h3>
+        </div>
+        <div class="simulation-rating" aria-label="${escapeHtml(report.rating.label)}">
+          <strong>${report.rating.stars}</strong>
+          <span>${escapeHtml(report.rating.label)}</span>
+        </div>
+      </div>
+      <div class="simulation-metrics">
+        <span class="simulation-pill">${escapeHtml(countLabel)}</span>
+        <span class="simulation-pill">${report.fields} terrain${report.fields > 1 ? 's' : ''}</span>
+        <span class="simulation-pill">Créneau : ${escapeHtml(windowLabel)}</span>
+        <span class="simulation-pill">Match : ${report.duration} min</span>
+      </div>
+      <div class="simulation-summary">
+        <p>${escapeHtml(report.activeLabel)}</p>
+        <p>${escapeHtml(report.waitingLabel)}</p>
+        <p>${escapeHtml(rotationsLabel)}</p>
+      </div>
+      ${alertsHtml}
+      <div class="simulation-advice">
+        <h4>Organisation conseillée</h4>
+        <ul>${recommendationsHtml}</ul>
+      </div>
+    </div>
+  `;
+  dom.simulationPanel.classList.remove('hidden');
+  return report;
+}
+
+function hideSimulationPanel() {
+  if (!dom.simulationPanel) return;
+  dom.simulationPanel.classList.add('hidden');
+  dom.simulationPanel.innerHTML = '';
+}
+
+function simulateCurrentDraft() {
+  const report = buildSimulationReport(state.draft);
+  renderSimulationPanel(report);
+  return report;
 }
 
 function createSessionName(options) {
@@ -2686,62 +2991,60 @@ function createSessionName(options) {
 }
 
 function createTeamsForLaunch(options) {
-  const config = getSelectedConfiguration();
-  if (options.sport === 'sport-co' && options.format !== 'rotating-teams') {
-    const teamCount = config?.teamCount || 4;
-    const names = getDraftTeamNames(config || { teamCount });
-    return ensureTeamListLength(names, teamCount, 'Équipe');
-  }
-  const count = state.draft.participantCount;
-  return getDraftStudentNames(count);
+  return createTeamsForDraft(state.draft, options);
 }
 
 async function launchTournament() {
-  const options = buildLaunchOptions();
-  const teams = createTeamsForLaunch(options);
-  const schedule = generateSchedule(teams, options);
-  const session = {
-    id: uniqueId('session'),
-    createdAt: new Date().toISOString(),
-    savedAt: new Date().toISOString(),
-    name: createSessionName(options),
-    sport: options.sport,
-    format: options.format,
-    teams: [...teams],
-    schedule,
-    scores: {},
-    currentRotation: 0,
-    options: {
-      fields: options.fields,
-      duration: options.duration,
-      startTime: options.startTime,
-      endTime: options.endTime,
-      teamSize: options.teamSize,
-      poolSize: options.poolSize,
-      rotatingReferee: options.rotatingReferee,
-      scoreTable: options.scoreTable,
-      challengeRange: options.challengeRange,
-    },
-    completed: false,
-  };
-  if (session.format === 'challenge') {
-    session.challengeOrder = session.schedule.teams.map(t => t.name);
-    session.challengeLog = [];
-    session.options.challengeRange = options.challengeRange || 5;
+  try {
+    const options = buildLaunchOptions();
+    const teams = createTeamsForLaunch(options);
+    const schedule = generateSchedule(teams, options);
+    const session = {
+      id: uniqueId('session'),
+      createdAt: new Date().toISOString(),
+      savedAt: new Date().toISOString(),
+      name: createSessionName(options),
+      sport: options.sport,
+      format: options.format,
+      teams: [...teams],
+      schedule,
+      scores: {},
+      currentRotation: 0,
+      options: {
+        fields: options.fields,
+        duration: options.duration,
+        startTime: options.startTime,
+        endTime: options.endTime,
+        teamSize: options.teamSize,
+        poolSize: options.poolSize,
+        rotatingReferee: options.rotatingReferee,
+        scoreTable: options.scoreTable,
+        challengeRange: options.challengeRange,
+      },
+      completed: false,
+    };
+    if (session.format === 'challenge') {
+      session.challengeOrder = session.schedule.teams.map(t => t.name);
+      session.challengeLog = [];
+      session.options.challengeRange = options.challengeRange || 5;
+    }
+    const classroomChoice = await promptClassroomChoice();
+    if (classroomChoice) {
+      const classroom = getClassroomById(classroomChoice);
+      session.classroomId = classroom?.id || null;
+      session.classroomName = classroom?.name || null;
+    } else {
+      session.classroomId = null;
+      session.classroomName = null;
+    }
+    state.currentSession = session;
+    resetTimer();
+    saveSessionLocally(session);
+    showView('live');
+  } catch (error) {
+    console.error('[launchTournament] Génération impossible.', error);
+    window.alert('Impossible de générer la séance avec ces paramètres. Vérifiez le nombre de participants, les terrains, la durée et le créneau.');
   }
-  const classroomChoice = await promptClassroomChoice();
-  if (classroomChoice) {
-    const classroom = getClassroomById(classroomChoice);
-    session.classroomId = classroom?.id || null;
-    session.classroomName = classroom?.name || null;
-  } else {
-    session.classroomId = null;
-    session.classroomName = null;
-  }
-  state.currentSession = session;
-  resetTimer();
-  saveSessionLocally(session);
-  showView('live');
 }
 
 /* === Vue 4 — pilotage live === */
@@ -2833,6 +3136,12 @@ function adjustScore(matchId, side, delta) {
 function validateZeroScore(matchId) {
   const session = state.currentSession;
   if (!session) return;
+  const existing = getScoreRecord(session, matchId);
+  const hasAnyScore = existing && (existing.home != null || existing.away != null);
+  const isNonZero = hasAnyScore && (existing.home !== 0 || existing.away !== 0);
+  if (hasAnyScore && isNonZero) {
+    if (!window.confirm(`Un score ${existing.home}-${existing.away} est déjà saisi. Remplacer par 0-0 ?`)) return;
+  }
   session.scores[matchId] = createExplicitScoreRecord(0, 0);
   saveSessionLocally(session);
   renderLiveView();
@@ -2873,6 +3182,7 @@ function finishTournament() {
 }
 
 function renderRankingDrawer(session) {
+  if (!dom.liveRankingContent) return;
   const standings = computeStandings(session);
   if (!standings.length) {
     dom.liveRankingContent.innerHTML = '<div class="empty-state">Aucun résultat saisi pour le moment.</div>';
@@ -2884,14 +3194,25 @@ function renderRankingDrawer(session) {
 function getRoleBadgeStyle(role) {
   if (role === 'Arbitre') return 'background:rgba(249,115,22,0.14);color:#c2410c;border:1px solid rgba(249,115,22,0.3);';
   if (role === 'Table') return 'background:rgba(59,130,246,0.14);color:#1d4ed8;border:1px solid rgba(59,130,246,0.3);';
-  if (role === 'Coach') return 'background:rgba(34,197,94,0.14);color:#15803d;border:1px solid rgba(34,197,94,0.3);';
   return 'background:rgba(15,23,42,0.06);color:var(--text-soft);border:1px solid rgba(148,163,184,0.25);';
+}
+
+function getUnavailableRotationRoles(rotation, byeAssignments, enabledRoles) {
+  const assignedRoles = new Set();
+  (rotation?.matches || []).forEach(match => {
+    if (match?.referee || match?.ladderReferee) assignedRoles.add('Arbitre');
+  });
+  (byeAssignments || []).forEach(entry => {
+    if (entry?.role) assignedRoles.add(entry.role);
+  });
+  return (enabledRoles || []).filter(role => role && role !== 'Spectateur actif' && !assignedRoles.has(role));
 }
 
 function renderByeAssignmentsBlock(assignments, session) {
   if (!Array.isArray(assignments) || !assignments.length) return '';
+  const participantLabel = getParticipantLabel(session, assignments.length);
   return `<div style="margin-top:16px;padding:14px 16px;border-radius:16px;background:#fef9c3;border:1px solid #ca8a04;color:#92400e;font-weight:600;">
-    ⚠️ Élève(s) au repos cette rotation :
+    ⚠️ ${participantLabel} au repos cette rotation :
     <div style="display:grid;gap:8px;margin-top:10px;">
       ${assignments.map(entry => `
         <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;">
@@ -2904,6 +3225,7 @@ function renderByeAssignmentsBlock(assignments, session) {
 }
 
 function renderLiveMatches(session) {
+  if (!dom.liveMatches) return;
   const rotation = getCurrentRotation(session);
   if (!rotation) {
     dom.liveMatches.innerHTML = '<div class="empty-state">Aucune rotation disponible.</div>';
@@ -3003,13 +3325,18 @@ function renderLiveMatches(session) {
       ? rotation.byeAssignments
       : assignRolesForByes(exemptPlayers, enabledRoles);
   const exemptHtml = renderByeAssignmentsBlock(effectiveByeAssignments, session);
+  const unavailableRoles = !exemptPlayers.length ? getUnavailableRotationRoles(rotation, effectiveByeAssignments, enabledRoles) : [];
+  const noRestMessage = unavailableRoles.length
+    ? `<div style="margin-top:16px;padding:14px 16px;border-radius:16px;background:rgba(59,130,246,0.08);border:1px solid rgba(59,130,246,0.22);color:#1e3a8a;font-weight:600;">ℹ️ Aucun ${getParticipantLabel(session, 1).toLowerCase()} au repos cette rotation : ${escapeHtml(unavailableRoles.join(' / '))} non attribué${unavailableRoles.length > 1 ? 's' : ''}.</div>`
+    : '';
   const warningHtml = rotation.warningMessage
     ? `<div style="margin-bottom:12px;padding:12px 16px;border-radius:14px;background:#fef9c3;border:1px solid #ca8a04;color:#92400e;font-weight:700;">${escapeHtml(rotation.warningMessage)}</div>`
     : '';
-  dom.liveMatches.innerHTML = warningHtml + matchesHtml + exemptHtml;
+  dom.liveMatches.innerHTML = warningHtml + matchesHtml + exemptHtml + noRestMessage;
 }
 
 function renderChallengeLive(session) {
+  if (!dom.liveMatches || !dom.nextRotationBtn) return;
   dom.liveModeLabel.textContent = 'Défi';
   dom.liveSessionTitle.textContent = session.name;
   const logCount = session.challengeLog?.length || 0;
@@ -3081,11 +3408,16 @@ function renderChallengeLive(session) {
     </div>
   `;
 
+  if (typeof window._challengeHighlightTimeout !== 'undefined' && window._challengeHighlightTimeout) {
+    clearTimeout(window._challengeHighlightTimeout);
+    window._challengeHighlightTimeout = null;
+  }
   let highlightTimeout = null;
   let selectedChallengerIdx = null;
 
   function clearHighlight() {
-    if (highlightTimeout) { clearTimeout(highlightTimeout); highlightTimeout = null; }
+    if (window._challengeHighlightTimeout) { clearTimeout(window._challengeHighlightTimeout); window._challengeHighlightTimeout = null; highlightTimeout = null; }
+    else if (highlightTimeout) { clearTimeout(highlightTimeout); highlightTimeout = null; }
     selectedChallengerIdx = null;
     document.querySelectorAll('#challengeList .challenge-row').forEach(btn => {
       btn.classList.remove('challenge-selected', 'challenge-target', 'challenge-challenger', 'challenge-dimmed');
@@ -3104,28 +3436,43 @@ function renderChallengeLive(session) {
     const targetName = currentOrder[targetIdx];
     const modal = document.getElementById('challengeModal');
     const scoreForm = document.getElementById('challengeScoreForm');
-    document.getElementById('challengerTitle').textContent =
-      `${formatDisplayName(challengerName)} (rang ${challengerIdx + 1})`;
-    document.getElementById('challengeTargetLabel').textContent =
-      `contre ${formatDisplayName(targetName)} (rang ${targetIdx + 1})`;
-    document.getElementById('challengeHomeName').textContent = formatDisplayName(targetName);
-    document.getElementById('challengeAwayName').textContent = formatDisplayName(challengerName);
-    document.getElementById('challengeHomeVal').textContent = '0';
-    document.getElementById('challengeAwayVal').textContent = '0';
+    const challengerTitle = document.getElementById('challengerTitle');
+    const challengeTargetLabel = document.getElementById('challengeTargetLabel');
+    const challengeHomeName = document.getElementById('challengeHomeName');
+    const challengeAwayName = document.getElementById('challengeAwayName');
+    const challengeHomeVal = document.getElementById('challengeHomeVal');
+    const challengeAwayVal = document.getElementById('challengeAwayVal');
+    const challengeHomeMin = document.getElementById('challengeHomeMin');
+    const challengeHomePlus = document.getElementById('challengeHomePlus');
+    const challengeAwayMin = document.getElementById('challengeAwayMin');
+    const challengeAwayPlus = document.getElementById('challengeAwayPlus');
+    const challengeConfirmBtn = document.getElementById('challengeConfirmBtn');
+    const challengeCancelBtn = document.getElementById('challengeCancelBtn');
+    if (!modal || !scoreForm || !challengerTitle || !challengeTargetLabel || !challengeHomeName || !challengeAwayName || !challengeHomeVal || !challengeAwayVal || !challengeHomeMin || !challengeHomePlus || !challengeAwayMin || !challengeAwayPlus || !challengeConfirmBtn || !challengeCancelBtn) {
+      console.warn('[renderChallengeLive] Éléments de la modale défi introuvables.');
+      return;
+    }
+    challengerTitle.textContent = `${formatDisplayName(challengerName)} (rang ${challengerIdx + 1})`;
+    challengeTargetLabel.textContent = `contre ${formatDisplayName(targetName)} (rang ${targetIdx + 1})`;
+    challengeHomeName.textContent = formatDisplayName(targetName);
+    challengeAwayName.textContent = formatDisplayName(challengerName);
+    challengeHomeVal.textContent = '0';
+    challengeAwayVal.textContent = '0';
     scoreForm.classList.remove('hidden');
     modal.classList.remove('hidden');
 
     let scores = { home: 0, away: 0 };
     const updateVal = (side, step) => {
       scores[side] = Math.max(0, (scores[side] || 0) + step);
-      document.getElementById(`challenge${side === 'home' ? 'Home' : 'Away'}Val`).textContent = scores[side];
+      const targetValue = side === 'home' ? challengeHomeVal : challengeAwayVal;
+      targetValue.textContent = scores[side];
     };
-    document.getElementById('challengeHomeMin').onclick = () => updateVal('home', -1);
-    document.getElementById('challengeHomePlus').onclick = () => updateVal('home', 1);
-    document.getElementById('challengeAwayMin').onclick = () => updateVal('away', -1);
-    document.getElementById('challengeAwayPlus').onclick = () => updateVal('away', 1);
+    challengeHomeMin.onclick = () => updateVal('home', -1);
+    challengeHomePlus.onclick = () => updateVal('home', 1);
+    challengeAwayMin.onclick = () => updateVal('away', -1);
+    challengeAwayPlus.onclick = () => updateVal('away', 1);
 
-    document.getElementById('challengeConfirmBtn').onclick = () => {
+    challengeConfirmBtn.onclick = () => {
       const co = session.challengeOrder;
       const isDraw = scores.home === scores.away;
       const challengerWon = !isDraw && scores.away > scores.home;
@@ -3154,7 +3501,7 @@ function renderChallengeLive(session) {
         if (hint) {
           hint.textContent = 'Match nul — les rangs restent inchangés.';
           hint.style.color = 'var(--text-soft)';
-          setTimeout(() => {
+          window._challengeHighlightTimeout = highlightTimeout = setTimeout(() => {
             const nextHint = document.getElementById('challengeHint');
             if (nextHint) {
               nextHint.textContent = 'Tape sur un joueur pour voir contre qui il peut jouer.';
@@ -3165,12 +3512,16 @@ function renderChallengeLive(session) {
       }
     };
 
-    document.getElementById('challengeCancelBtn').onclick = () => {
+    challengeCancelBtn.onclick = () => {
       modal.classList.add('hidden');
     };
   }
 
   const challengeListEl = document.getElementById('challengeList');
+  if (!challengeListEl) {
+    console.warn('[renderChallengeLive] Liste des défis introuvable.');
+    return;
+  }
   challengeListEl.addEventListener('click', e => {
     const btn = e.target.closest('[data-challenge-index]');
     if (!btn) return;
@@ -3195,7 +3546,7 @@ function renderChallengeLive(session) {
           : `${formatDisplayName(session.challengeOrder[0])} est en tête — personne à défier.`;
         hint.style.color = 'var(--text-soft)';
       }
-      setTimeout(() => {
+      window._challengeHighlightTimeout = highlightTimeout = setTimeout(() => {
         const h = document.getElementById('challengeHint');
         if (h) { h.textContent = 'Tape sur un joueur pour voir contre qui il peut jouer.'; h.style.color = 'var(--text-soft)'; }
       }, 2000);
@@ -3229,7 +3580,7 @@ function renderChallengeLive(session) {
       hint.style.color = 'var(--accent-dark)';
     }
 
-    highlightTimeout = setTimeout(() => {
+    window._challengeHighlightTimeout = highlightTimeout = setTimeout(() => {
       clearHighlight();
     }, 8000);
   });
@@ -3237,6 +3588,7 @@ function renderChallengeLive(session) {
 
 function renderLiveView() {
   const session = state.currentSession;
+  if (!dom.liveModeLabel || !dom.liveSessionTitle || !dom.liveRotationLabel || !dom.timerStartBtn || !dom.timerPauseBtn || !dom.timerResetBtn || !dom.prevRotationBtn || !dom.nextRotationBtn) return;
   const rotationStatusBanner = document.getElementById('rotationStatusBanner');
   if (!session) {
     showView('home');
@@ -3591,10 +3943,16 @@ function appendNextSwissRotation(session) {
       p1.wins += 1;
       p1.points += 3;
       p2.losses += 1;
-    } else {
+    } else if (record.home < record.away) {
       p2.wins += 1;
       p2.points += 3;
       p1.losses += 1;
+    } else {
+      // Match nul — 1 point chacun, cohérent avec computeTeamStandings
+      p1.draws += 1;
+      p1.points += 1;
+      p2.draws += 1;
+      p2.points += 1;
     }
   });
   swiss.history.push({ round: swiss.round, matches: committedMatches });
@@ -3621,15 +3979,29 @@ function moveToNextRotation() {
   const session = state.currentSession;
   if (!session) return;
   if (!isRotationComplete(session)) {
-    window.alert('Terminez tous les matchs de la rotation avant de passer à la suivante.');
+    window.alert('Terminez tous les matchs de la rotation avant de passer à la suivante. Utilisez aussi "Valider 0-0" si un match nul sans point doit compter.');
     return;
   }
   const atLastRotation = session.currentRotation >= session.schedule.rotations.length - 1;
   if (session.format === 'ladder' && atLastRotation) {
-    appendNextLadderRotation(session);
+    const appended = appendNextLadderRotation(session);
+    if (!appended) {
+      if (!window.confirm('Nombre maximum de rotations atteint. Terminer le tournoi et voir les statistiques ?')) return;
+      session.completed = true;
+      saveSessionLocally(session);
+      showView('summary');
+      return;
+    }
   }
   if (session.format === 'swiss' && atLastRotation) {
-    appendNextSwissRotation(session);
+    const appended = appendNextSwissRotation(session);
+    if (!appended) {
+      if (!window.confirm('Nombre maximum de rondes atteint. Terminer le tournoi et voir les statistiques ?')) return;
+      session.completed = true;
+      saveSessionLocally(session);
+      showView('summary');
+      return;
+    }
   }
   if (session.currentRotation < session.schedule.rotations.length - 1) {
     session.currentRotation += 1;
@@ -3739,19 +4111,21 @@ function exportCsv(session = state.currentSession) {
   if (session.format === 'rotating-teams') {
     standings = computeRotatingPlayerStats(session);
   }
+  const formatCsvName = value => (session.sport === 'raquette' ? formatDisplayName(value) : value);
   const rankingHeader = 'nom;victoires;nuls;defaites;points;buts_pour;buts_contre';
-  const rankingRows = standings.map(row => [row.name, row.wins, row.draws, row.losses, row.points, row.pointsFor, row.pointsAgainst].join(';'));
+  const rankingRows = standings.map(row => [formatCsvName(row.name), row.wins, row.draws, row.losses, row.points, row.pointsFor, row.pointsAgainst].join(';'));
   let matchHeader = 'rotation;terrain;domicile;exterieur;score_domicile;score_exterieur';
   let matchRows = session.schedule.rotations.flatMap(rotation =>
     rotation.matches.map(match => {
       const participants = resolveMatchParticipants(match, session);
-      const record = getScoreRecord(session, match.id) || { home: '', away: '' };
-      return [rotation.number, match.field || '', participants.home, participants.away, record.home ?? '', record.away ?? ''].join(';');
-    })
+      const record = getScoreRecord(session, match.id);
+      if (!isScoreComplete(record)) return null;
+      return [rotation.number, match.field || '', formatCsvName(participants.home), formatCsvName(participants.away), record.home ?? '', record.away ?? ''].join(';');
+    }).filter(Boolean)
   );
   if (session.format === 'challenge') {
     matchHeader = 'ordre;nom;victoires;defaites;points_marques;points_encaisses';
-    matchRows = standings.map((row, index) => [index + 1, row.name, row.wins, row.losses, row.pointsFor, row.pointsAgainst].join(';'));
+    matchRows = standings.map((row, index) => [index + 1, formatCsvName(row.name), row.wins, row.losses, row.pointsFor, row.pointsAgainst].join(';'));
   }
   const csv = [
     'Classement général',
@@ -4120,7 +4494,7 @@ function showClassroomDetail(classroomId) {
 function restoreSession(sessionId, targetView = 'live') {
   const snapshot = getSessionById(sessionId);
   if (!snapshot) return;
-  state.currentSession = structuredClone(snapshot);
+  state.currentSession = cloneData(snapshot);
   if (!state.currentSession?.schedule || !Array.isArray(state.currentSession.schedule.rotations)) {
     console.error(`[restoreSession] Séance ${sessionId} invalide : planning absent ou corrompu.`);
     return;
@@ -4285,6 +4659,10 @@ function handleGlobalClick(event) {
     if (latest) restoreSession(latest.id, 'summary');
     return;
   }
+  if (event.target === dom.simulateSessionBtn) {
+    simulateCurrentDraft();
+    return;
+  }
   if (event.target === dom.timerStartBtn) {
     startTimer();
     return;
@@ -4335,6 +4713,9 @@ function handleGlobalClick(event) {
 }
 
 function handleGlobalInput(event) {
+  if (dom.newTournamentForm?.contains(event.target)) {
+    hideSimulationPanel();
+  }
   if (event.target === dom.participantCountInput) {
     state.draft.participantCount = clampSetupCount(event.target.value, 24);
     renderNewTournamentView();
@@ -4412,44 +4793,52 @@ function handleGlobalSubmit(event) {
 }
 
 function handleStepperButtons() {
-  dom.participantMinusBtn.addEventListener('click', () => {
+  addListenerIfPresent(dom.participantMinusBtn, 'click', () => {
+    hideSimulationPanel();
     state.draft.participantCount = clampSetupCount(state.draft.participantCount - 1, 24);
     renderNewTournamentView();
     persistState();
   });
-  dom.participantPlusBtn.addEventListener('click', () => {
+  addListenerIfPresent(dom.participantPlusBtn, 'click', () => {
+    hideSimulationPanel();
     state.draft.participantCount = clampSetupCount(state.draft.participantCount + 1, 24);
     renderNewTournamentView();
     persistState();
   });
-  dom.fieldMinusBtn.addEventListener('click', () => {
+  addListenerIfPresent(dom.fieldMinusBtn, 'click', () => {
+    hideSimulationPanel();
     state.draft.fields = clampNumber(state.draft.fields - 1, 1, 20, 2);
     renderTimeSection();
     persistState();
   });
-  dom.fieldPlusBtn.addEventListener('click', () => {
+  addListenerIfPresent(dom.fieldPlusBtn, 'click', () => {
+    hideSimulationPanel();
     state.draft.fields = clampNumber(state.draft.fields + 1, 1, 20, 2);
     renderTimeSection();
     persistState();
   });
-  dom.durationMinusBtn.addEventListener('click', () => {
+  addListenerIfPresent(dom.durationMinusBtn, 'click', () => {
+    hideSimulationPanel();
     state.draft.duration = clampNumber(state.draft.duration - 1, 1, 60, 7);
     renderTimeSection();
     persistState();
   });
-  dom.durationPlusBtn.addEventListener('click', () => {
+  addListenerIfPresent(dom.durationPlusBtn, 'click', () => {
+    hideSimulationPanel();
     state.draft.duration = clampNumber(state.draft.duration + 1, 1, 60, 7);
     renderTimeSection();
     persistState();
   });
   if (dom.challengeRangeMinusBtn) {
-    dom.challengeRangeMinusBtn.addEventListener('click', () => {
+    addListenerIfPresent(dom.challengeRangeMinusBtn, 'click', () => {
+      hideSimulationPanel();
       state.draft.challengeRange = clampNumber((state.draft.challengeRange || 5) - 1, 1, 10, 5);
       if (dom.challengeRangeLabel) dom.challengeRangeLabel.textContent = `±${state.draft.challengeRange}`;
       if (dom.challengeRangeInput) dom.challengeRangeInput.value = state.draft.challengeRange;
       persistState();
     });
-    dom.challengeRangePlusBtn.addEventListener('click', () => {
+    addListenerIfPresent(dom.challengeRangePlusBtn, 'click', () => {
+      hideSimulationPanel();
       state.draft.challengeRange = clampNumber((state.draft.challengeRange || 5) + 1, 1, 10, 5);
       if (dom.challengeRangeLabel) dom.challengeRangeLabel.textContent = `±${state.draft.challengeRange}`;
       if (dom.challengeRangeInput) dom.challengeRangeInput.value = state.draft.challengeRange;
@@ -4457,13 +4846,15 @@ function handleStepperButtons() {
     });
   }
   if (dom.poolSizeMinusBtn) {
-    dom.poolSizeMinusBtn.addEventListener('click', () => {
+    addListenerIfPresent(dom.poolSizeMinusBtn, 'click', () => {
+      hideSimulationPanel();
       state.draft.poolSize = clampNumber((state.draft.poolSize || 4) - 1, 3, 6, 4);
       if (dom.poolSizeLabel) dom.poolSizeLabel.textContent = `${state.draft.poolSize}`;
       if (dom.poolSizeInput) dom.poolSizeInput.value = state.draft.poolSize;
       persistState();
     });
-    dom.poolSizePlusBtn.addEventListener('click', () => {
+    addListenerIfPresent(dom.poolSizePlusBtn, 'click', () => {
+      hideSimulationPanel();
       state.draft.poolSize = clampNumber((state.draft.poolSize || 4) + 1, 3, 6, 4);
       if (dom.poolSizeLabel) dom.poolSizeLabel.textContent = `${state.draft.poolSize}`;
       if (dom.poolSizeInput) dom.poolSizeInput.value = state.draft.poolSize;
@@ -4550,6 +4941,8 @@ function cacheDom() {
   dom.poolSizeLabel = document.getElementById('poolSizeLabel');
   dom.poolSizeMinusBtn = document.getElementById('poolSizeMinusBtn');
   dom.poolSizePlusBtn = document.getElementById('poolSizePlusBtn');
+  dom.simulateSessionBtn = document.getElementById('simulateSessionBtn');
+  dom.simulationPanel = document.getElementById('simulationPanel');
 }
 
 function bindEvents() {
