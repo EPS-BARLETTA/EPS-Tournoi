@@ -33,7 +33,9 @@ const FORMAT_DEFINITIONS = {
 const dom = {};
 const runtime = {
   timerInterval: null,
+  helpTab: 'start',
 };
+const NEW_TOURNAMENT_STEP_COUNT = 5;
 
 function createDefaultDraft() {
   return {
@@ -52,6 +54,12 @@ function createDefaultDraft() {
     sessionName: '',
     challengeRange: 5,
     poolSize: 4,
+    challengeInitialRanking: [],
+    challengePlacementMode: 'auto',
+    ladderArbitratedFields: [],
+    ladderInitialSlots: [],
+    ladderPlacementMode: 'auto',
+    newStep: 1,
   };
 }
 
@@ -80,6 +88,10 @@ function clampNumber(value, min, max, fallback) {
 
 function clampSetupCount(value, fallback = 24) {
   return clampNumber(Number(value) || fallback, 4, 48, fallback);
+}
+
+function clampDraftStep(value) {
+  return clampNumber(Number(value) || 1, 1, NEW_TOURNAMENT_STEP_COUNT, 1);
 }
 
 function escapeHtml(value) {
@@ -216,41 +228,104 @@ function assignLadderByeAssignments(byeList, options = {}) {
   ];
 }
 
-function getSuggestedTeamConfigurations(studentCount) {
-  const safeCount = clampSetupCount(studentCount, 24);
-  return Array.from({ length: 7 }, (_, offset) => offset + 2)
-    .map(teamSize => {
-      const remainder = safeCount % teamSize;
-      const teamCount = Math.floor(safeCount / teamSize);
-      if (teamCount < 2) return null;
-      const exact = remainder === 0;
-      const acceptable = !exact && remainder <= Math.floor(teamSize / 2);
-      if (!exact && !acceptable) return null;
-      const inPreferredBand = teamSize >= 3 && teamSize <= 6;
-      return {
-        key: `${teamSize}-${teamCount}-${remainder}`,
-        teamSize,
-        teamCount,
-        substitutes: remainder,
-        exact,
-        acceptable,
-        inPreferredBand,
-        label: exact
-          ? `${teamCount} équipes de ${teamSize}`
-          : `${teamCount} équipes de ${teamSize} (+ ${remainder} remplaçants)`,
-      };
+function buildTeamCompositionLabel(teamSizes) {
+  const counts = new Map();
+  [...teamSizes].sort((left, right) => right - left).forEach(size => {
+    counts.set(size, (counts.get(size) || 0) + 1);
+  });
+  return Array.from(counts.entries())
+    .sort((left, right) => right[0] - left[0])
+    .map(([size, count]) => `${count} équipe${count > 1 ? 's' : ''} de ${size}`)
+    .join(' + ');
+}
+
+function getSuggestionSource(sourceOrCount) {
+  if (sourceOrCount && typeof sourceOrCount === 'object') {
+    return {
+      ...createDefaultDraft(),
+      ...sourceOrCount,
+    };
+  }
+  return {
+    ...createDefaultDraft(),
+    participantCount: clampSetupCount(sourceOrCount, 24),
+    fields: state?.draft?.fields || 2,
+  };
+}
+
+function createSuggestedTeamConfig(teamSizes, source, score) {
+  const sortedSizes = [...teamSizes].sort((left, right) => right - left);
+  const teamCount = sortedSizes.length;
+  const minSize = Math.min(...sortedSizes);
+  const maxSize = Math.max(...sortedSizes);
+  const fields = clampNumber(Number(source.fields) || 2, 1, 20, 2);
+  const activeTeams = Math.min(teamCount, fields * 2);
+  const restingTeams = Math.max(teamCount - activeTeams, 0);
+  const composition = buildTeamCompositionLabel(sortedSizes);
+  const usesAllFields = activeTeams >= fields * 2;
+  const replacementNote = maxSize > 4
+    ? `Les équipes de ${maxSize} peuvent tourner avec remplacements courts.`
+    : 'Tous les élèves restent engagés sans remplaçant interne.';
+  const flowNote = restingTeams > 0
+    ? `${fields} terrain${fields > 1 ? 's utilisés' : ' utilisé'} en continu, avec ${restingTeams} équipe${restingTeams > 1 ? 's' : ''} au repos à chaque rotation.`
+    : `${fields} terrain${fields > 1 ? 's utilisés' : ' utilisé'} en continu, sans équipe au repos.`;
+  return {
+    key: `teams-${sortedSizes.join('-')}`,
+    teamSize: Math.round(sortedSizes.reduce((sum, size) => sum + size, 0) / Math.max(teamCount, 1)),
+    teamSizes: sortedSizes,
+    teamCount,
+    substitutes: 0,
+    exact: minSize === maxSize,
+    acceptable: minSize >= 4 && maxSize <= 6,
+    inPreferredBand: minSize >= 4 && maxSize <= 6,
+    usesAllFields,
+    restingTeams,
+    composition,
+    recommendationScore: score,
+    label: `${teamCount} équipes`,
+    summary: composition,
+    explanation: `${composition}. ${flowNote} ${replacementNote}`,
+  };
+}
+
+function getSuggestedTeamConfigurations(sourceOrCount) {
+  const source = getSuggestionSource(sourceOrCount);
+  const safeCount = clampSetupCount(source.participantCount, 24);
+  const targetTeams = Math.max(2, clampNumber(Number(source.fields) || 2, 1, 20, 2) * 2);
+  return Array.from({ length: Math.min(10, safeCount - 1) }, (_, index) => index + 2)
+    .map(teamCount => {
+      const baseSize = Math.floor(safeCount / teamCount);
+      const extraPlayers = safeCount % teamCount;
+      const maxSize = baseSize + (extraPlayers > 0 ? 1 : 0);
+      if (baseSize < 3 || maxSize > 7) return null;
+      const teamSizes = Array.from({ length: teamCount }, (_, index) => (index < extraPlayers ? baseSize + 1 : baseSize));
+      let score = 0;
+      score += Math.abs(teamCount - targetTeams) * 7;
+      score += Math.abs(((baseSize + maxSize) / 2) - 4.5) * 5;
+      score += Math.abs(maxSize - baseSize) * 4;
+      if (teamCount % 2 === 1) score += 8;
+      if (baseSize < 4) score += 10;
+      if (maxSize > 6) score += 10;
+      if (baseSize >= 4 && maxSize <= 6) score -= 8;
+      if (teamCount === targetTeams) score -= 6;
+      if (teamCount > targetTeams + 1) score += 3;
+      if (teamCount < targetTeams) score += 2;
+      if (targetTeams >= 4 && teamCount === targetTeams - 1 && maxSize <= 5) score += 2;
+      return createSuggestedTeamConfig(teamSizes, source, score);
     })
     .filter(Boolean)
     .sort((left, right) => {
-      if (left.exact !== right.exact) return left.exact ? -1 : 1;
-      if (left.inPreferredBand !== right.inPreferredBand) return left.inPreferredBand ? -1 : 1;
-      const leftDistance = Math.abs(left.teamSize - 4.5);
-      const rightDistance = Math.abs(right.teamSize - 4.5);
-      if (leftDistance !== rightDistance) return leftDistance - rightDistance;
-      if (left.substitutes !== right.substitutes) return left.substitutes - right.substitutes;
+      if (left.recommendationScore !== right.recommendationScore) return left.recommendationScore - right.recommendationScore;
+      if (left.usesAllFields !== right.usesAllFields) return left.usesAllFields ? -1 : 1;
+      if (left.restingTeams !== right.restingTeams) return left.restingTeams - right.restingTeams;
+      if (left.teamCount !== right.teamCount) return Math.abs(left.teamCount - targetTeams) - Math.abs(right.teamCount - targetTeams);
       return right.teamSize - left.teamSize;
     })
-    .slice(0, 4);
+    .slice(0, 4)
+    .map((entry, index) => ({
+      ...entry,
+      recommended: index === 0,
+    }));
 }
 
 function getEstimatedRotationCount(participantCount, fieldCount, options = {}) {
@@ -289,7 +364,7 @@ function isTeamBasedDraft() {
 
 function getSelectedConfigurationForSource(source = state.draft) {
   if (!isTeamBasedSource(source)) return null;
-  const suggestions = getSuggestedTeamConfigurations(source.participantCount);
+  const suggestions = getSuggestedTeamConfigurations(source);
   if (!suggestions.length) return null;
   return suggestions.find(entry => entry.key === source.selectedConfigKey) || suggestions[0];
 }
@@ -344,6 +419,370 @@ function getDraftStudentNamesForSource(source, count) {
     return ensureTeamListLength([], count, 'Élève');
   }
   return ensureTeamListLength(typed, count, 'Élève');
+}
+
+function getChallengePlayerPoolForSource(source = state.draft) {
+  const safeSource = {
+    ...createDefaultDraft(),
+    ...(source || {}),
+  };
+  return getDraftStudentNamesForSource(safeSource, clampSetupCount(safeSource.participantCount, 24));
+}
+
+function buildAutomaticChallengeInitialRanking(playerNames, alphabetical = false) {
+  const names = alphabetical
+    ? [...playerNames].sort((left, right) => left.localeCompare(right, 'fr', { sensitivity: 'base' }))
+    : [...playerNames];
+  return names.map((name, index) => ({
+    rank: index + 1,
+    name: String(name || '').trim(),
+  }));
+}
+
+function buildRandomChallengeInitialRanking(playerNames, randomFn = Math.random) {
+  const names = [...playerNames];
+  for (let index = names.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(randomFn() * (index + 1));
+    [names[index], names[swapIndex]] = [names[swapIndex], names[index]];
+  }
+  return buildAutomaticChallengeInitialRanking(names, false);
+}
+
+function buildEmptyChallengeInitialRanking(source = state.draft) {
+  const count = clampSetupCount(source?.participantCount, 24);
+  return Array.from({ length: count }, (_, index) => ({
+    rank: index + 1,
+    name: '',
+  }));
+}
+
+function getDraftChallengeInitialRankingForSource(source = state.draft) {
+  const players = getChallengePlayerPoolForSource(source);
+  const roster = new Set(players);
+  const count = players.length;
+  const existing = Array.isArray(source?.challengeInitialRanking) ? source.challengeInitialRanking : [];
+  const byRank = new Map(existing.map(entry => [Number(entry?.rank), entry || {}]));
+  return Array.from({ length: count }, (_, index) => {
+    const rank = index + 1;
+    const entry = byRank.get(rank) || {};
+    const text = String(entry.name || '').trim();
+    return {
+      rank,
+      name: text && roster.has(text) ? text : '',
+    };
+  });
+}
+
+function resolveChallengeInitialRankingForSource(source = state.draft) {
+  const ranking = getDraftChallengeInitialRankingForSource(source);
+  const hasAssignedPlayer = ranking.some(entry => entry.name);
+  if (hasAssignedPlayer) return ranking;
+  if (source?.challengePlacementMode === 'manual') return ranking;
+  return buildAutomaticChallengeInitialRanking(getChallengePlayerPoolForSource(source), source?.challengePlacementMode === 'alpha');
+}
+
+function getChallengePlacementValidation(source = state.draft) {
+  const players = getChallengePlayerPoolForSource(source);
+  const ranking = resolveChallengeInitialRankingForSource(source);
+  const roster = new Set(players);
+  const seen = new Map();
+  const duplicates = [];
+  const unknown = [];
+  const assigned = [];
+  ranking.forEach(entry => {
+    const name = String(entry.name || '').trim();
+    if (!name) return;
+    assigned.push(name);
+    if (!roster.has(name)) unknown.push(name);
+    if (seen.has(name)) duplicates.push(name);
+    else seen.set(name, entry.rank);
+  });
+  const unplaced = players.filter(name => !seen.has(name));
+  return {
+    valid: duplicates.length === 0 && unknown.length === 0 && unplaced.length === 0 && assigned.length === players.length,
+    players,
+    ranking,
+    assigned,
+    unplaced,
+    duplicates: [...new Set(duplicates)],
+    unknown: [...new Set(unknown)],
+  };
+}
+
+function persistDraftChallengeInitialRanking(ranking) {
+  state.draft.challengeInitialRanking = (ranking || []).map(entry => ({
+    rank: Number(entry.rank),
+    name: String(entry.name || '').trim(),
+  }));
+}
+
+function applyDraftChallengePlacementMode(mode = 'auto') {
+  const players = getChallengePlayerPoolForSource(state.draft);
+  if (mode === 'manual') {
+    persistDraftChallengeInitialRanking(buildEmptyChallengeInitialRanking(state.draft));
+    state.draft.challengePlacementMode = 'manual';
+    return;
+  }
+  if (mode === 'random') {
+    persistDraftChallengeInitialRanking(buildRandomChallengeInitialRanking(players));
+    state.draft.challengePlacementMode = 'random';
+    return;
+  }
+  persistDraftChallengeInitialRanking(buildAutomaticChallengeInitialRanking(players, mode === 'alpha'));
+  state.draft.challengePlacementMode = mode === 'alpha' ? 'alpha' : 'auto';
+}
+
+function setDraftChallengeRankValue(rankNumber, nextValue) {
+  const ranking = getDraftChallengeInitialRankingForSource(state.draft).map(entry => ({ ...entry }));
+  const target = ranking.find(entry => entry.rank === rankNumber);
+  if (!target) return;
+  const normalized = String(nextValue || '').trim();
+  const currentValue = String(target.name || '').trim();
+  if (normalized && normalized !== currentValue) {
+    ranking.forEach(entry => {
+      if (entry.rank !== rankNumber && String(entry.name || '').trim() === normalized) {
+        entry.name = currentValue;
+      }
+    });
+  }
+  target.name = normalized;
+  persistDraftChallengeInitialRanking(ranking);
+  state.draft.challengePlacementMode = 'manual';
+}
+
+function getAvailableChallengePlayersForRank(source = state.draft, rankNumber) {
+  const players = getChallengePlayerPoolForSource(source);
+  const ranking = getDraftChallengeInitialRankingForSource(source);
+  const target = ranking.find(entry => entry.rank === rankNumber);
+  const currentValue = String(target?.name || '').trim();
+  const usedElsewhere = new Set();
+  ranking.forEach(entry => {
+    if (entry.rank === rankNumber) return;
+    const value = String(entry.name || '').trim();
+    if (value) usedElsewhere.add(value);
+  });
+  return players.filter(name => name === currentValue || !usedElsewhere.has(name));
+}
+
+function normalizeLadderArbitratedFieldsForSource(source = state.draft) {
+  const maxField = clampNumber(Number(source?.fields) || 2, 1, 20, 2);
+  const raw = Array.isArray(source?.ladderArbitratedFields) ? source.ladderArbitratedFields : [];
+  return [...new Set(raw
+    .map(value => Number(value))
+    .filter(value => Number.isInteger(value) && value >= 1 && value <= maxField))]
+    .sort((left, right) => left - right);
+}
+
+function getLadderPlayerPoolForSource(source = state.draft) {
+  const safeSource = {
+    ...createDefaultDraft(),
+    ...(source || {}),
+  };
+  return getDraftStudentNamesForSource(safeSource, clampSetupCount(safeSource.participantCount, 24));
+}
+
+function buildAutomaticLadderInitialSlots(playerNames, source = state.draft, alphabetical = false) {
+  const names = alphabetical
+    ? [...playerNames].sort((left, right) => left.localeCompare(right, 'fr', { sensitivity: 'base' }))
+    : [...playerNames];
+  const arbitratedFields = new Set(normalizeLadderArbitratedFieldsForSource(source));
+  const fieldCount = clampNumber(Number(source?.fields) || 2, 1, 20, 2);
+  const slots = [];
+  let cursor = 0;
+  for (let field = 1; field <= fieldCount; field += 1) {
+    const hasReferee = arbitratedFields.has(field);
+    const needed = hasReferee ? 3 : 2;
+    if (cursor + needed > names.length) {
+      slots.push({
+        field,
+        home: '',
+        away: '',
+        referee: hasReferee ? '' : '',
+        hasReferee,
+      });
+      continue;
+    }
+    const home = names[cursor] || '';
+    const away = names[cursor + 1] || '';
+    const referee = hasReferee ? (names[cursor + 2] || '') : '';
+    cursor += needed;
+    slots.push({
+      field,
+      home,
+      away,
+      referee,
+      hasReferee,
+    });
+  }
+  return slots;
+}
+
+function buildRandomLadderInitialSlots(playerNames, source = state.draft, randomFn = Math.random) {
+  const names = [...playerNames];
+  for (let index = names.length - 1; index > 0; index -= 1) {
+    const swapIndex = Math.floor(randomFn() * (index + 1));
+    [names[index], names[swapIndex]] = [names[swapIndex], names[index]];
+  }
+  return buildAutomaticLadderInitialSlots(names, source, false);
+}
+
+function buildEmptyLadderInitialSlots(source = state.draft) {
+  const fieldCount = clampNumber(Number(source?.fields) || 2, 1, 20, 2);
+  const arbitratedFields = new Set(normalizeLadderArbitratedFieldsForSource(source));
+  return Array.from({ length: fieldCount }, (_, index) => ({
+    field: index + 1,
+    home: '',
+    away: '',
+    referee: '',
+    hasReferee: arbitratedFields.has(index + 1),
+  }));
+}
+
+function getDraftLadderInitialSlotsForSource(source = state.draft) {
+  const fieldCount = clampNumber(Number(source?.fields) || 2, 1, 20, 2);
+  const arbitratedFields = new Set(normalizeLadderArbitratedFieldsForSource(source));
+  const roster = new Set(getLadderPlayerPoolForSource(source));
+  const existing = Array.isArray(source?.ladderInitialSlots) ? source.ladderInitialSlots : [];
+  const byField = new Map(existing.map(slot => [Number(slot?.field), slot || {}]));
+  return Array.from({ length: fieldCount }, (_, index) => {
+    const field = index + 1;
+    const hasReferee = arbitratedFields.has(field);
+    const slot = byField.get(field) || {};
+    const cleanRole = value => {
+      const text = String(value || '').trim();
+      return text && roster.has(text) ? text : '';
+    };
+    return {
+      field,
+      home: cleanRole(slot.home),
+      away: cleanRole(slot.away),
+      referee: hasReferee ? cleanRole(slot.referee) : '',
+      hasReferee,
+    };
+  });
+}
+
+function resolveLadderInitialSlotsForSource(source = state.draft) {
+  const slots = getDraftLadderInitialSlotsForSource(source);
+  const hasAssignedPlayer = slots.some(slot => slot.home || slot.away || slot.referee);
+  if (hasAssignedPlayer) return slots;
+  if (source?.ladderPlacementMode === 'manual') return slots;
+  return buildAutomaticLadderInitialSlots(getLadderPlayerPoolForSource(source), source, false);
+}
+
+function getLadderPlacementValidation(source = state.draft) {
+  const players = getLadderPlayerPoolForSource(source);
+  const slots = resolveLadderInitialSlotsForSource(source);
+  const roster = new Set(players);
+  const seen = new Map();
+  const duplicates = [];
+  const unknown = [];
+  const partialFields = [];
+  const requiredArbitratedFields = normalizeLadderArbitratedFieldsForSource(source);
+
+  slots.forEach(slot => {
+    const roles = slot.hasReferee ? ['home', 'away', 'referee'] : ['home', 'away'];
+    const values = roles.map(role => String(slot[role] || '').trim()).filter(Boolean);
+    values.forEach(name => {
+      if (!roster.has(name)) unknown.push(name);
+      const previous = seen.get(name);
+      if (previous) {
+        duplicates.push(name);
+      } else {
+        seen.set(name, { field: slot.field });
+      }
+    });
+    const filledCount = values.length;
+    const requiredCount = roles.length;
+    if (slot.hasReferee) {
+      if (filledCount !== 0 && filledCount !== requiredCount) partialFields.push(slot.field);
+      if (filledCount !== requiredCount) partialFields.push(slot.field);
+    } else if (filledCount !== 0 && filledCount !== requiredCount) {
+      partialFields.push(slot.field);
+    }
+  });
+
+  const uniquePartialFields = [...new Set(partialFields)].sort((left, right) => left - right);
+  const assigned = [...seen.keys()];
+  const unplaced = players.filter(name => !seen.has(name));
+  return {
+    valid: duplicates.length === 0 && unknown.length === 0 && uniquePartialFields.length === 0,
+    players,
+    slots,
+    assigned,
+    unplaced,
+    duplicates: [...new Set(duplicates)],
+    unknown: [...new Set(unknown)],
+    partialFields: uniquePartialFields,
+    arbitratedFields: requiredArbitratedFields,
+  };
+}
+
+function persistDraftLadderSlots(slots) {
+  state.draft.ladderInitialSlots = (slots || []).map(slot => ({
+    field: Number(slot.field),
+    home: String(slot.home || '').trim(),
+    away: String(slot.away || '').trim(),
+    referee: String(slot.referee || '').trim(),
+  }));
+}
+
+function applyDraftLadderPlacementMode(mode = 'auto') {
+  const players = getLadderPlayerPoolForSource(state.draft);
+  if (mode === 'manual') {
+    persistDraftLadderSlots(buildEmptyLadderInitialSlots(state.draft));
+    state.draft.ladderPlacementMode = 'manual';
+    return;
+  }
+  if (mode === 'random') {
+    persistDraftLadderSlots(buildRandomLadderInitialSlots(players, state.draft));
+    state.draft.ladderPlacementMode = 'random';
+    return;
+  }
+  persistDraftLadderSlots(buildAutomaticLadderInitialSlots(players, state.draft, mode === 'alpha'));
+  state.draft.ladderPlacementMode = mode === 'alpha' ? 'alpha' : 'auto';
+}
+
+function resetDraftLadderInitialSlots(alphabetical = false) {
+  applyDraftLadderPlacementMode(alphabetical ? 'alpha' : 'auto');
+}
+
+function setDraftLadderSlotValue(fieldNumber, role, nextValue) {
+  const slots = getDraftLadderInitialSlotsForSource(state.draft).map(slot => ({ ...slot }));
+  const target = slots.find(slot => slot.field === fieldNumber);
+  if (!target || !['home', 'away', 'referee'].includes(role)) return;
+  if (role === 'referee' && !target.hasReferee) return;
+  const normalized = String(nextValue || '').trim();
+  const currentValue = String(target[role] || '').trim();
+  if (normalized && normalized !== currentValue) {
+    slots.forEach(slot => {
+      ['home', 'away', 'referee'].forEach(otherRole => {
+        if (slot.field === fieldNumber && otherRole === role) return;
+        if (String(slot[otherRole] || '').trim() === normalized) {
+          slot[otherRole] = currentValue;
+        }
+      });
+    });
+  }
+  target[role] = normalized;
+  persistDraftLadderSlots(slots);
+  state.draft.ladderPlacementMode = 'manual';
+}
+
+function getAvailableLadderPlayersForSlot(source = state.draft, fieldNumber, role) {
+  const players = getLadderPlayerPoolForSource(source);
+  const slots = getDraftLadderInitialSlotsForSource(source);
+  const target = slots.find(slot => slot.field === fieldNumber);
+  const currentValue = String(target?.[role] || '').trim();
+  const usedElsewhere = new Set();
+  slots.forEach(slot => {
+    ['home', 'away', 'referee'].forEach(candidateRole => {
+      if (slot.field === fieldNumber && candidateRole === role) return;
+      const value = String(slot[candidateRole] || '').trim();
+      if (value) usedElsewhere.add(value);
+    });
+  });
+  return players.filter(name => name === currentValue || !usedElsewhere.has(name));
 }
 
 /* === Fonctions de génération récupérées/adaptées === */
@@ -1499,35 +1938,40 @@ function buildGroupPoolsRaquetteSchedule(teams, options) {
 
 function buildLadderRotation(order, rotationNumber, options) {
   const fieldCount = clampNumber(Number(options.fields) || 1, 1, 20, 1);
-  const useReferees = Boolean(options.rotatingReferee);
-  const n = order.length;
+  const arbitratedFieldSet = new Set((options.ladderArbitratedFields || []).map(Number));
+  const sourceSlots = Array.isArray(options.ladderInitialSlots) && options.ladderInitialSlots.length
+    ? options.ladderInitialSlots
+    : buildAutomaticLadderInitialSlots(order, { fields: fieldCount, ladderArbitratedFields: [...arbitratedFieldSet] }, false);
+  const normalizedSlots = sourceSlots
+    .map(slot => ({
+      field: Number(slot.field),
+      home: String(slot.home || '').trim(),
+      away: String(slot.away || '').trim(),
+      referee: arbitratedFieldSet.has(Number(slot.field)) ? String(slot.referee || '').trim() : '',
+      hasReferee: arbitratedFieldSet.has(Number(slot.field)),
+    }))
+    .filter(slot => Number.isInteger(slot.field) && slot.field >= 1 && slot.field <= fieldCount)
+    .sort((left, right) => left.field - right.field);
+  const roster = new Set(order);
+  const slots = normalizedSlots
+    .filter(slot => {
+      if (!slot.home || !slot.away) return false;
+      if (slot.hasReferee && !slot.referee) return false;
+      return roster.has(slot.home) && roster.has(slot.away) && (!slot.referee || roster.has(slot.referee));
+    })
+    .map(slot => ({
+      field: slot.field,
+      home: slot.home,
+      away: slot.away,
+      referee: slot.hasReferee ? slot.referee : null,
+      hasReferee: slot.hasReferee,
+    }));
 
-  let arbitratedFields = 0;
-  let freeFields = 0;
-  let benchCount = 0;
-  let warningMessage = null;
-
-  if (useReferees) {
-    arbitratedFields = Math.min(fieldCount, Math.floor(n / 3));
-    const remainingPlayers = n - arbitratedFields * 3;
-    const possibleFreeFields = Math.floor(remainingPlayers / 2);
-    freeFields = Math.min(fieldCount - arbitratedFields, possibleFreeFields);
-    benchCount = n - arbitratedFields * 3 - freeFields * 2;
-
-    if (benchCount > 0) {
-      warningMessage = `⚠️ ${benchCount} élève(s) en attente cette rotation (nombre impair incompressible). Donnez-leur un rôle actif (observer, chronomètre, arbitre volant).`;
-    }
-  } else {
-    freeFields = Math.min(fieldCount, Math.floor(n / 2));
-    benchCount = n - freeFields * 2;
-    if (benchCount > 0) {
-      warningMessage = `⚠️ ${benchCount} élève(s) en attente (terrain insuffisant ou nombre impair). Donnez-leur un rôle actif.`;
-    }
+  if (!validateUniqueLadderSlotParticipants(slots, 'initial ladder placement')) {
+    throw new Error('Placement initial Ladder invalide : doublon détecté.');
   }
 
-  const totalActiveFields = arbitratedFields + freeFields;
-
-  if (totalActiveFields < 1) {
+  if (!slots.length) {
     return {
       number: rotationNumber,
       title: `Rotation ${rotationNumber}`,
@@ -1537,41 +1981,19 @@ function buildLadderRotation(order, rotationNumber, options) {
       byeAssignments: assignRolesForByes(order, getEnabledRolesFromOptions(options)),
       orderSnapshot: [...order],
       ladderSlots: [],
+      arbitratedFields: 0,
+      freeFields: 0,
       warningMessage: `⚠️ Pas assez de joueurs pour former un seul match.`,
     };
   }
 
-  const slots = [];
-  const usedPlayers = new Set();
-  let playerCursor = 0;
-
-  for (let f = 0; f < arbitratedFields; f++) {
-    const home = order[playerCursor];
-    const away = order[playerCursor + 1];
-    const referee = order[playerCursor + 2];
-    playerCursor += 3;
-    slots.push({ field: f + 1, home, away, referee, hasReferee: true });
-    usedPlayers.add(home);
-    usedPlayers.add(away);
-    usedPlayers.add(referee);
-  }
-
-  for (let f = 0; f < freeFields; f++) {
-    const home = order[playerCursor];
-    const away = order[playerCursor + 1];
-    playerCursor += 2;
-    slots.push({
-      field: arbitratedFields + f + 1,
-      home,
-      away,
-      referee: null,
-      hasReferee: false,
-    });
-    usedPlayers.add(home);
-    usedPlayers.add(away);
-  }
-
+  const usedPlayers = new Set(slots.flatMap(slot => [slot.home, slot.away, slot.referee].filter(Boolean)));
   const byes = order.filter(name => !usedPlayers.has(name));
+  const arbitratedFields = slots.filter(slot => slot.hasReferee).length;
+  const freeFields = slots.length - arbitratedFields;
+  const warningMessage = byes.length > 0
+    ? `⚠️ ${byes.length} élève(s) en attente cette rotation. Donnez-leur un rôle actif.`
+    : null;
 
   const matches = slots.map(slot => ({
     id: buildMatchKey(rotationNumber, slot.home, slot.away),
@@ -1592,7 +2014,10 @@ function buildLadderRotation(order, rotationNumber, options) {
     matches,
     byes,
     byeAssignments,
-    orderSnapshot: [...order],
+    orderSnapshot: [
+      ...slots.flatMap(slot => [slot.home, slot.away, slot.referee].filter(Boolean)),
+      ...byes,
+    ],
     ladderSlots: slots,
     arbitratedFields,
     freeFields,
@@ -1609,8 +2034,9 @@ function buildLadderSchedule(teams, options) {
     teams: teams.map(name => ({ name })),
     ladder: {
       rotationTarget,
-      latestOrder: [...teams],
+      latestOrder: [...(firstRotation.orderSnapshot || teams)],
       currentSlots: firstRotation.ladderSlots || [],
+      arbitratedFields: cloneData(options.ladderArbitratedFields || []),
     },
     meta: {
       format: 'ladder',
@@ -1654,6 +2080,135 @@ function validateLadderMovement(previousRotation, nextRotation) {
   };
 }
 
+function validateUniqueLadderSlotParticipants(slots, contextLabel = 'ladder') {
+  const seen = new Set();
+  const duplicates = [];
+  (slots || []).forEach(slot => {
+    [slot.home, slot.away, slot.referee].filter(Boolean).forEach(name => {
+      if (seen.has(name)) duplicates.push(name);
+      seen.add(name);
+    });
+  });
+  if (duplicates.length) {
+    console.warn(`[buildNextFreeLadderSlots] ${contextLabel} : doublon(s) détecté(s) ${[...new Set(duplicates)].join(', ')}`);
+    return false;
+  }
+  return true;
+}
+
+function buildNextFreeLadderSlots(freeResults) {
+  const ordered = [...(freeResults || [])].sort((left, right) => left.field - right.field);
+  const nextSlots = ordered.map(result => ({
+    field: result.field,
+    home: result.home,
+    away: result.away,
+    referee: null,
+    hasReferee: false,
+  }));
+  let segmentStart = null;
+
+  const flushSegment = segmentEnd => {
+    if (segmentStart == null) return;
+    const length = segmentEnd - segmentStart + 1;
+    if (length < 2) {
+      segmentStart = null;
+      return;
+    }
+    for (let index = segmentStart; index <= segmentEnd; index += 1) {
+      const localIndex = index - segmentStart;
+      const current = ordered[index];
+      if (localIndex === 0) {
+        nextSlots[index] = {
+          field: current.field,
+          home: ordered[index].winner,
+          away: ordered[index + 1].winner,
+          referee: null,
+          hasReferee: false,
+        };
+      } else if (localIndex === length - 1) {
+        nextSlots[index] = {
+          field: current.field,
+          home: ordered[index - 1].loser,
+          away: ordered[index].loser,
+          referee: null,
+          hasReferee: false,
+        };
+      } else {
+        nextSlots[index] = {
+          field: current.field,
+          home: ordered[index - 1].loser,
+          away: ordered[index + 1].winner,
+          referee: null,
+          hasReferee: false,
+        };
+      }
+    }
+    segmentStart = null;
+  };
+
+  for (let index = 0; index < ordered.length; index += 1) {
+    const current = ordered[index];
+    const decisive = !current.draw && Boolean(current.winner) && Boolean(current.loser);
+    if (!decisive) {
+      flushSegment(index - 1);
+      nextSlots[index] = {
+        field: current.field,
+        home: current.home,
+        away: current.away,
+        referee: null,
+        hasReferee: false,
+      };
+      continue;
+    }
+    if (segmentStart == null) segmentStart = index;
+  }
+  flushSegment(ordered.length - 1);
+
+  if (!validateUniqueLadderSlotParticipants(nextSlots, 'free ladder chain')) {
+    return null;
+  }
+  return nextSlots;
+}
+
+function buildNextFixedArbitratedLadderSlots(results) {
+  const ordered = [...(results || [])].sort((left, right) => left.field - right.field);
+  const nextSlots = ordered.map((current, index) => {
+    const above = index > 0 ? ordered[index - 1] : null;
+    const below = index < ordered.length - 1 ? ordered[index + 1] : null;
+    if (current.draw) {
+      return {
+        field: current.field,
+        home: current.home,
+        away: current.away,
+        referee: current.hasReferee ? current.referee : null,
+        hasReferee: current.hasReferee,
+      };
+    }
+    const incomingAboveLoser = above && !above.draw ? above.loser : null;
+    const incomingBelowWinner = below && !below.draw ? below.winner : null;
+    if (current.hasReferee) {
+      return {
+        field: current.field,
+        home: current.referee || current.home,
+        away: incomingAboveLoser || current.winner || current.away,
+        referee: incomingBelowWinner || current.loser || current.referee || null,
+        hasReferee: true,
+      };
+    }
+    return {
+      field: current.field,
+      home: incomingAboveLoser || current.winner || current.home,
+      away: incomingBelowWinner || current.loser || current.away,
+      referee: null,
+      hasReferee: false,
+    };
+  });
+  if (!validateUniqueLadderSlotParticipants(nextSlots, 'fixed arbitrated ladder chain')) {
+    return null;
+  }
+  return nextSlots;
+}
+
 function buildChallengeBoard(teams, options) {
   const orderedTeams = teams.map((name, index) => ({ name, rank: index + 1 }));
   return {
@@ -1690,7 +2245,7 @@ function buildSwissRotation(roundNumber, matches, playerMap, options = {}) {
       phase: 'swiss',
       swissP1Id: match.p1Id,
       swissP2Id: match.p2Id,
-      swissNote: `${playerMap.get(match.p1Id)?.name || ''} et ${playerMap.get(match.p2Id)?.name || ''} ont tous les deux ${playerMap.get(match.p1Id)?.points || 0} pt${(playerMap.get(match.p1Id)?.points || 0) > 1 ? 's' : ''}`,
+      swissNote: `${formatDisplayName(playerMap.get(match.p1Id)?.name || '')} et ${formatDisplayName(playerMap.get(match.p2Id)?.name || '')} ont tous les deux ${playerMap.get(match.p1Id)?.points || 0} pt${(playerMap.get(match.p1Id)?.points || 0) > 1 ? 's' : ''}`,
     })),
     byes: matches.filter(match => match.bye).map(match => playerMap.get(match.p1Id)?.name).filter(Boolean),
   };
@@ -2051,6 +2606,24 @@ function sanitizeState(raw) {
   next.draft.challengeRange = clampNumber(Number(next.draft.challengeRange) || 5, 1, 10, 5);
   next.draft.poolSize = clampNumber(Number(next.draft.poolSize) || 4, 3, 6, 4);
   next.draft.duration = clampNumber(Number(next.draft.duration) || 7, 1, 60, 7);
+  next.draft.challengePlacementMode = ['auto', 'alpha', 'random', 'manual'].includes(next.draft.challengePlacementMode)
+    ? next.draft.challengePlacementMode
+    : 'auto';
+  next.draft.ladderPlacementMode = ['auto', 'alpha', 'random', 'manual'].includes(next.draft.ladderPlacementMode)
+    ? next.draft.ladderPlacementMode
+    : 'auto';
+  next.draft.challengeInitialRanking = getDraftChallengeInitialRankingForSource(next.draft).map(entry => ({
+    rank: entry.rank,
+    name: entry.name,
+  }));
+  next.draft.ladderArbitratedFields = normalizeLadderArbitratedFieldsForSource(next.draft);
+  next.draft.ladderInitialSlots = getDraftLadderInitialSlotsForSource(next.draft).map(slot => ({
+    field: slot.field,
+    home: slot.home,
+    away: slot.away,
+    referee: slot.referee,
+  }));
+  next.draft.newStep = clampDraftStep(next.draft.newStep);
   next.draft.startTime = next.draft.startTime || '10:00';
   next.draft.endTime = next.draft.endTime || '11:00';
   next.draft.teamNames = Array.isArray(next.draft.teamNames) ? next.draft.teamNames.map(value => String(value || '')) : [];
@@ -2424,6 +2997,7 @@ function computeIndividualStandings(session) {
   if (session.format === 'rotating-teams') {
     return computeRotatingPlayerStats(session);
   }
+  const trackNumericPoints = session.format !== 'ladder';
   const rows = new Map(session.teams.map(name => [name, createStatsRow(name)]));
   session.schedule.rotations.forEach(rotation => {
     rotation.matches.forEach(match => {
@@ -2436,10 +3010,12 @@ function computeIndividualStandings(session) {
       rows.set(participants.away, away);
       home.played += 1;
       away.played += 1;
-      home.pointsFor += record.home;
-      home.pointsAgainst += record.away;
-      away.pointsFor += record.away;
-      away.pointsAgainst += record.home;
+      if (trackNumericPoints) {
+        home.pointsFor += record.home;
+        home.pointsAgainst += record.away;
+        away.pointsFor += record.away;
+        away.pointsAgainst += record.home;
+      }
       if (record.home > record.away) {
         home.wins += 1;
         home.points += 3;
@@ -2602,20 +3178,255 @@ function renderFormatCards() {
   dom.formatCards.innerHTML = cards;
 }
 
+function getNewTournamentStepMeta(step = state.draft.newStep) {
+  const currentStep = clampDraftStep(step);
+  const definitions = {
+    1: {
+      title: 'Activité',
+      description: 'Choisissez le sport et le format.',
+      hint: 'Sélectionnez d’abord le cadre de séance.',
+    },
+    2: {
+      title: 'Paramètres de séance',
+      description: 'Renseignez les élèves, les terrains et le créneau.',
+      hint: 'Saisissez ici les paramètres qui serviront à l’analyse EPS.',
+    },
+    3: {
+      title: 'Analyse EPS',
+      description: 'Analyse de la configuration actuelle et des options possibles.',
+      hint: 'Acceptez la recommandation ou revenez ajuster les paramètres.',
+    },
+    4: {
+      title: 'Noms',
+      description: 'Ajoutez des noms d’élèves ou d’équipes si vous en avez besoin.',
+      hint: 'Cette étape est facultative : vous pouvez aussi la passer.',
+    },
+    5: {
+      title: 'Validation',
+      description: 'Vérifiez le résumé final, simulez puis lancez la séance.',
+      hint: 'Dernière étape avant le lancement du tournoi.',
+    },
+  };
+  return definitions[currentStep];
+}
+
+function buildNewTournamentSummaryRows() {
+  const config = getSelectedConfigurationForSource(state.draft);
+  const participantSummary = isTeamBasedDraft() && config
+    ? `${config.teamCount} équipes · ${config.composition}`
+    : `${state.draft.participantCount} élève${state.draft.participantCount > 1 ? 's' : ''}`;
+  const start = state.draft.startTime || '--:--';
+  const end = state.draft.endTime || '--:--';
+  const rows = [
+    ['Activité', getActivityLabel(state.draft)],
+    ['Format', getFormatLabelFromSource(state.draft)],
+    ['Participants', participantSummary],
+    ['Terrains', `${state.draft.fields} terrain${state.draft.fields > 1 ? 's' : ''}`],
+    ['Créneau', `${start} → ${end} · ${state.draft.duration} min`],
+  ];
+  if (state.draft.sport === 'raquette' && state.draft.format === 'ladder') {
+    const arbitrated = normalizeLadderArbitratedFieldsForSource(state.draft);
+    rows.push(['Terrains arbitres', arbitrated.length ? arbitrated.map(field => `T${field}`).join(', ') : 'Aucun']);
+  }
+  return rows;
+}
+
+function renderNewTournamentSummary() {
+  if (!dom.newWizardSummary) return;
+  const rows = buildNewTournamentSummaryRows();
+  dom.newWizardSummary.innerHTML = rows
+    .map(([label, value]) => `
+      <div class="new-wizard-summary-row">
+        <span class="new-wizard-summary-label">${escapeHtml(label)}</span>
+        <span class="new-wizard-summary-value">${escapeHtml(value)}</span>
+      </div>
+    `)
+    .join('');
+}
+
+function renderNewTournamentInlineSummary() {
+  if (!dom.newWizardInlineSummary) return;
+  const currentStep = clampDraftStep(state.draft.newStep);
+  if (currentStep === 1) {
+    dom.newWizardInlineSummary.classList.add('hidden');
+    dom.newWizardInlineSummary.textContent = '';
+    return;
+  }
+  const config = getSelectedConfigurationForSource(state.draft);
+  const participantSummary = isTeamBasedDraft() && config
+    ? `${config.teamCount} équipes`
+    : `${state.draft.participantCount} élèves`;
+  dom.newWizardInlineSummary.textContent = [
+    getActivityLabel(state.draft),
+    getFormatLabelFromSource(state.draft),
+    participantSummary,
+    `${state.draft.fields} terrains`,
+  ].join(' • ');
+  dom.newWizardInlineSummary.classList.remove('hidden');
+}
+
+function getAnalysisOptionNotes(option, report, index) {
+  const notes = [];
+  if (index === 0) {
+    notes.push('Avantage : tous les terrains peuvent rester utilisés avec des équipes de taille raisonnable.');
+  } else if (option.usesAllFields) {
+    notes.push('Avantage : tous les terrains peuvent être utilisés simultanément.');
+  } else {
+    notes.push(`Avantage : ${option.restingTeams} équipe${option.restingTeams > 1 ? 's' : ''} au repos, utile pour arbitrer ou souffler.`);
+  }
+  if (option.teamSize >= 6) {
+    notes.push('Limite : équipes assez grandes, donc temps de pratique individuel plus réduit.');
+  } else if (option.teamSizes.every(size => size === option.teamSizes[0])) {
+    notes.push('Avantage : équipes homogènes et faciles à répartir.');
+  } else {
+    notes.push('Limite : composition mixte, à expliquer clairement aux élèves avant de démarrer.');
+  }
+  if (option.teamSize <= 2) {
+    notes.push('Limite : peu adapté à la plupart des sports collectifs classiques.');
+  } else if (option.restingTeams > 0) {
+    notes.push(`Limite : une rotation devra gérer ${option.restingTeams} équipe${option.restingTeams > 1 ? 's' : ''} au repos.`);
+  } else if (report.waitingLabel.includes('0 équipe')) {
+    notes.push('Limite : sans équipe au repos, prévoir arbitrage croisé si vous activez des rôles.');
+  }
+  return notes;
+}
+
+function renderAnalysisStep() {
+  if (!dom.analysisPanel) return;
+  const report = buildSimulationReport(state.draft);
+  const suggestions = isTeamBasedDraft() ? getSuggestedTeamConfigurations(state.draft) : [];
+  const config = getSelectedConfigurationForSource(state.draft);
+  const availableMinutes = report.availableMinutes == null ? 'Créneau à vérifier' : `${report.availableMinutes} min`;
+  if (!isTeamBasedDraft() || !suggestions.length) {
+    dom.analysisPanel.innerHTML = `
+      <div class="analysis-card">
+        <div class="analysis-metrics">
+          <span class="analysis-metric">${state.draft.participantCount} élèves</span>
+          <span class="analysis-metric">${state.draft.fields} terrain${state.draft.fields > 1 ? 's' : ''}</span>
+          <span class="analysis-metric">${escapeHtml(availableMinutes)}</span>
+        </div>
+        <div class="analysis-rating">
+          <strong>${escapeHtml(report.rating.stars)}</strong>
+          <span>${escapeHtml(report.rating.label)}</span>
+        </div>
+        <ul class="analysis-points">
+          ${report.recommendations.slice(0, 4).map(entry => `<li>${escapeHtml(entry)}</li>`).join('')}
+        </ul>
+      </div>
+    `;
+    return;
+  }
+  dom.analysisPanel.innerHTML = `
+    <div class="analysis-card analysis-card--hero">
+      <div class="analysis-metrics">
+        <span class="analysis-metric">${state.draft.participantCount} élèves</span>
+        <span class="analysis-metric">${state.draft.fields} terrain${state.draft.fields > 1 ? 's' : ''}</span>
+        <span class="analysis-metric">${escapeHtml(availableMinutes)}</span>
+      </div>
+      <div class="analysis-rating">
+        <strong>${escapeHtml(report.rating.stars)}</strong>
+        <span>${escapeHtml(report.rating.label)}</span>
+      </div>
+      <div class="analysis-options">
+        ${suggestions.map((option, index) => {
+          const isSelected = config?.key === option.key;
+          const notes = getAnalysisOptionNotes(option, report, index);
+          return `
+            <article class="analysis-option-card ${index === 0 ? 'is-recommended' : ''} ${isSelected ? 'is-selected' : ''}">
+              <div class="analysis-option-head">
+                <div>
+                  <span class="analysis-label">${index === 0 ? 'Recommandé' : `Alternative ${index}`}</span>
+                  <strong>${escapeHtml(option.label)}</strong>
+                </div>
+                ${index === 0 ? '<span class="analysis-option-badge">Recommandé</span>' : ''}
+              </div>
+              <div class="analysis-block">
+                <span class="analysis-label">Composition</span>
+                <strong>${escapeHtml(option.composition)}</strong>
+              </div>
+              <div class="analysis-block">
+                <span class="analysis-label">Lecture terrain</span>
+                <p>${escapeHtml(option.explanation)}</p>
+              </div>
+              <ul class="analysis-points">
+                ${notes.map(entry => `<li>${escapeHtml(entry)}</li>`).join('')}
+              </ul>
+              <button class="btn ${index === 0 ? 'btn-primary' : 'btn-secondary'} btn-lg" type="button" data-analysis-config-key="${option.key}">Choisir cette option</button>
+            </article>
+          `;
+        }).join('')}
+      </div>
+    </div>
+  `;
+}
+
+function renderValidationAnalysis() {
+  if (!dom.validationAnalysis) return;
+  const report = buildSimulationReport(state.draft);
+  const config = getSelectedConfigurationForSource(state.draft);
+  const recommendation = config
+    ? `${config.teamCount} équipes · ${config.composition}`
+    : `${report.unitCount} ${report.unitLabel}`;
+  dom.validationAnalysis.innerHTML = `
+    <div class="validation-analysis-card">
+      <span class="validation-analysis-label">Analyse retenue</span>
+      <strong>${escapeHtml(recommendation)}</strong>
+      <p>${escapeHtml(report.rating.stars)} ${escapeHtml(report.rating.label)} · ${escapeHtml(report.activeLabel)}</p>
+    </div>
+  `;
+}
+
+function renderNewTournamentStepper() {
+  const currentStep = clampDraftStep(state.draft.newStep);
+  state.draft.newStep = currentStep;
+  if (dom.newStepTitle) dom.newStepTitle.textContent = getNewTournamentStepMeta(currentStep).title;
+  if (dom.newStepDescription) dom.newStepDescription.textContent = getNewTournamentStepMeta(currentStep).description;
+  if (dom.newStepProgress) dom.newStepProgress.textContent = `Étape ${currentStep} sur ${NEW_TOURNAMENT_STEP_COUNT}`;
+  if (dom.newStepNavHint) dom.newStepNavHint.textContent = getNewTournamentStepMeta(currentStep).hint;
+  if (dom.newStepPrevBtn) dom.newStepPrevBtn.disabled = currentStep <= 1;
+  if (dom.newStepNextBtn) {
+    dom.newStepNextBtn.disabled = currentStep >= NEW_TOURNAMENT_STEP_COUNT;
+    dom.newStepNextBtn.classList.toggle('hidden', currentStep >= NEW_TOURNAMENT_STEP_COUNT);
+  }
+  document.querySelectorAll('.new-wizard-step').forEach(section => {
+    section.classList.toggle('is-visible', Number(section.dataset.step) === currentStep);
+  });
+  if (dom.newWizardSteps) {
+    Array.from(dom.newWizardSteps.children).forEach((item, index) => {
+      const step = index + 1;
+      item.classList.toggle('is-active', step === currentStep);
+      item.classList.toggle('is-complete', step < currentStep);
+    });
+  }
+  renderNewTournamentInlineSummary();
+  renderAnalysisStep();
+  renderNewTournamentSummary();
+  renderValidationAnalysis();
+  renderLadderSetupSection();
+  renderChallengeSetupSection();
+}
+
 function renderConfigSuggestions() {
   if (!isTeamBasedDraft()) {
     dom.configSuggestions.innerHTML = '';
     return;
   }
-  const suggestions = getSuggestedTeamConfigurations(state.draft.participantCount);
+  const suggestions = getSuggestedTeamConfigurations(state.draft);
   if (!suggestions.length) {
     dom.configSuggestions.innerHTML = '';
     return;
   }
   const selected = getSelectedConfiguration();
-  dom.configSuggestions.innerHTML = suggestions
-    .map(entry => `<button class="suggestion-chip ${selected?.key === entry.key ? 'selected' : ''}" type="button" data-config-key="${entry.key}">✓ ${escapeHtml(entry.label)}</button>`)
-    .join('');
+  const selectedExplanation = selected?.explanation || suggestions[0].explanation;
+  dom.configSuggestions.innerHTML = `
+    <div class="suggestion-note">Recommandation EPS terrain</div>
+    <div class="suggestion-chip-row">
+      ${suggestions
+        .map(entry => `<button class="suggestion-chip ${selected?.key === entry.key ? 'selected' : ''} ${entry.recommended ? 'is-recommended' : ''}" type="button" data-config-key="${entry.key}">${escapeHtml(entry.label)} · ${escapeHtml(entry.summary)}</button>`)
+        .join('')}
+    </div>
+    <div class="suggestion-explanation"><strong>Organisation conseillée :</strong> ${escapeHtml(selectedExplanation)}</div>
+  `;
 }
 
 function renderTeamNameFields() {
@@ -2662,7 +3473,7 @@ function renderParticipantSection() {
       'font-size:0.92rem',
       'line-height:1.45',
     ].join(';');
-    const anchor = dom.configSuggestions || dom.participantCountLabel?.closest('.panel-card');
+    const anchor = dom.participantCountInput?.closest('.panel-card') || dom.configSuggestions;
     if (anchor && anchor.parentNode) anchor.parentNode.insertBefore(oddAlert, anchor.nextSibling);
   }
   const isIndividual = !isTeamBasedDraft();
@@ -2673,6 +3484,133 @@ function renderParticipantSection() {
   } else {
     oddAlert.style.display = 'none';
   }
+}
+
+function renderLadderSetupSection() {
+  if (!dom.ladderSetupSection || !dom.ladderArbitratedFields || !dom.ladderPlacementGrid || !dom.ladderPlacementStatus || !dom.ladderUnplacedList) return;
+  const isLadder = state.draft.sport === 'raquette' && state.draft.format === 'ladder';
+  dom.ladderSetupSection.classList.toggle('hidden', !isLadder);
+  if (!isLadder) {
+    dom.ladderArbitratedFields.innerHTML = '';
+    dom.ladderPlacementGrid.innerHTML = '';
+    dom.ladderPlacementStatus.innerHTML = '';
+    dom.ladderUnplacedList.innerHTML = '';
+    return;
+  }
+  if (!Array.isArray(state.draft.ladderInitialSlots) || !state.draft.ladderInitialSlots.length) {
+    resetDraftLadderInitialSlots(false);
+  }
+  const validation = getLadderPlacementValidation(state.draft);
+  const slots = validation.slots;
+  dom.ladderArbitratedFields.innerHTML = Array.from({ length: state.draft.fields }, (_, index) => {
+    const field = index + 1;
+    const checked = validation.arbitratedFields.includes(field);
+    return `
+      <label class="ladder-field-toggle">
+        <input type="checkbox" data-ladder-arb-field="${field}" ${checked ? 'checked' : ''} />
+        <span>T${field}</span>
+      </label>
+    `;
+  }).join('');
+  dom.ladderPlacementStatus.innerHTML = `
+    <div class="ladder-placement-status ${validation.valid ? 'is-valid' : 'is-warning'}">
+      <strong>${validation.valid ? 'Placement prêt' : 'Placement à corriger'}</strong>
+      <span>${validation.assigned.length} placé${validation.assigned.length > 1 ? 's' : ''} · ${validation.unplaced.length} en attente</span>
+      ${validation.duplicates.length ? `<span>Doublons : ${escapeHtml(validation.duplicates.map(formatDisplayName).join(', '))}</span>` : ''}
+      ${validation.partialFields.length ? `<span>Terrains incomplets : ${validation.partialFields.map(field => `T${field}`).join(', ')}</span>` : ''}
+    </div>
+  `;
+  dom.ladderPlacementGrid.innerHTML = slots.map(slot => {
+    const buildSelect = role => {
+      const currentValue = String(slot[role] || '').trim();
+      const label = role === 'home' ? 'Joueur 1' : role === 'away' ? 'Joueur 2' : 'Arbitre';
+      const availablePlayers = getAvailableLadderPlayersForSlot(state.draft, slot.field, role);
+      return `
+        <label class="field">
+          <span>${label}</span>
+          <select data-ladder-slot-field="${slot.field}" data-ladder-slot-role="${role}">
+            <option value="">—</option>
+            ${availablePlayers.map(name => `<option value="${escapeHtml(name)}" ${name === currentValue ? 'selected' : ''}>${escapeHtml(formatDisplayName(name))}</option>`).join('')}
+          </select>
+        </label>
+      `;
+    };
+    return `
+      <article class="ladder-placement-card">
+        <div class="ladder-placement-head">
+          <strong>Terrain ${slot.field}</strong>
+          <span>${slot.hasReferee ? 'Arbitré fixe' : 'Terrain normal'}</span>
+        </div>
+        <div class="ladder-placement-roles">
+          ${buildSelect('home')}
+          ${buildSelect('away')}
+          ${slot.hasReferee ? buildSelect('referee') : ''}
+        </div>
+      </article>
+    `;
+  }).join('');
+  dom.ladderUnplacedList.innerHTML = validation.unplaced.length
+    ? `
+      <div class="ladder-unplaced-card">
+        <strong>Élèves non placés</strong>
+        <p>${escapeHtml(validation.unplaced.map(formatDisplayName).join(' · '))}</p>
+      </div>
+    `
+    : `
+      <div class="ladder-unplaced-card is-complete">
+        <strong>Tous les élèves sont affectés</strong>
+        <p>Aucun élève en attente au lancement.</p>
+      </div>
+    `;
+}
+
+function renderChallengeSetupSection() {
+  if (!dom.challengeSetupSection || !dom.challengePlacementGrid || !dom.challengePlacementStatus || !dom.challengeUnplacedList) return;
+  const isChallenge = state.draft.sport === 'raquette' && state.draft.format === 'challenge';
+  dom.challengeSetupSection.classList.toggle('hidden', !isChallenge);
+  if (!isChallenge) {
+    dom.challengePlacementGrid.innerHTML = '';
+    dom.challengePlacementStatus.innerHTML = '';
+    dom.challengeUnplacedList.innerHTML = '';
+    return;
+  }
+  if (!Array.isArray(state.draft.challengeInitialRanking) || !state.draft.challengeInitialRanking.length) {
+    applyDraftChallengePlacementMode('auto');
+  }
+  const validation = getChallengePlacementValidation(state.draft);
+  dom.challengePlacementStatus.innerHTML = `
+    <div class="ladder-placement-status ${validation.valid ? 'is-valid' : 'is-warning'} challenge-placement-status">
+      <strong>${validation.valid ? 'Classement prêt' : 'Classement à corriger'}</strong>
+      <span>${validation.assigned.length} placé${validation.assigned.length > 1 ? 's' : ''} · ${validation.unplaced.length} en attente</span>
+      ${validation.duplicates.length ? `<span>Doublons : ${escapeHtml(validation.duplicates.map(formatDisplayName).join(', '))}</span>` : ''}
+    </div>
+  `;
+  dom.challengePlacementGrid.innerHTML = validation.ranking.map(entry => {
+    const currentValue = String(entry.name || '').trim();
+    const availablePlayers = getAvailableChallengePlayersForRank(state.draft, entry.rank);
+    return `
+      <label class="challenge-initial-ranking-row">
+        <strong>Rang ${entry.rank}</strong>
+        <select data-challenge-rank="${entry.rank}">
+          <option value="">—</option>
+          ${availablePlayers.map(name => `<option value="${escapeHtml(name)}" ${name === currentValue ? 'selected' : ''}>${escapeHtml(formatDisplayName(name))}</option>`).join('')}
+        </select>
+      </label>
+    `;
+  }).join('');
+  dom.challengeUnplacedList.innerHTML = validation.unplaced.length
+    ? `
+      <div class="challenge-unplaced-card">
+        <strong>Élèves non placés</strong>
+        <p>${escapeHtml(validation.unplaced.map(formatDisplayName).join(' · '))}</p>
+      </div>
+    `
+    : `
+      <div class="challenge-unplaced-card is-complete">
+        <strong>Classement prêt</strong>
+        <p>Tous les élèves sont classés avant lancement.</p>
+      </div>
+    `;
 }
 
 function renderTimeSection() {
@@ -2708,9 +3646,18 @@ function renderNewTournamentView() {
   renderFormatCards();
   renderParticipantSection();
   renderTimeSection();
+  renderLadderSetupSection();
+  renderChallengeSetupSection();
   dom.rotatingRefereeInput.checked = Boolean(state.draft.rotatingReferee);
   dom.scoreTableInput.checked = Boolean(state.draft.scoreTable);
   dom.sessionNameInput.value = state.draft.sessionName;
+  if (dom.skipNamesStepBtn) {
+    dom.skipNamesStepBtn.classList.toggle('hidden', state.draft.sport === 'raquette' && state.draft.format === 'ladder');
+  }
+  const rotatingRefereeRow = dom.rotatingRefereeInput?.closest('.toggle-row');
+  if (rotatingRefereeRow) {
+    rotatingRefereeRow.classList.toggle('hidden', state.draft.sport === 'raquette' && state.draft.format === 'ladder');
+  }
   updateDraftSessionNamePlaceholder();
   const isChallenge = state.draft.format === 'challenge';
   if (dom.challengeRangeBlock) {
@@ -2724,7 +3671,7 @@ function renderNewTournamentView() {
     if (dom.poolSizeInput) dom.poolSizeInput.value = state.draft.poolSize;
     if (dom.poolSizeLabel) dom.poolSizeLabel.textContent = `${state.draft.poolSize}`;
   }
-  hideSimulationPanel();
+  renderNewTournamentStepper();
 }
 
 function buildLaunchOptions() {
@@ -2733,6 +3680,17 @@ function buildLaunchOptions() {
 
 function buildOptionsFromDraft(source = state.draft) {
   const config = getSelectedConfigurationForSource(source);
+  let ladderArbitratedFields = [];
+  if (source?.sport === 'raquette' && source?.format === 'ladder') {
+    ladderArbitratedFields = normalizeLadderArbitratedFieldsForSource(source);
+    if (!ladderArbitratedFields.length && source?.rotatingReferee) {
+      const fallbackCount = Math.min(
+        clampNumber(Number(source.fields) || 2, 1, 20, 2),
+        Math.floor(clampSetupCount(source.participantCount, 24) / 3)
+      );
+      ladderArbitratedFields = Array.from({ length: fallbackCount }, (_, index) => index + 1);
+    }
+  }
   return {
     sport: source.sport === 'raquette' ? 'raquette' : 'sport-co',
     format: source.format,
@@ -2743,10 +3701,28 @@ function buildOptionsFromDraft(source = state.draft) {
     practiceType: source.sport === 'raquette' ? 'raquette' : source.format === 'rotating-teams' ? 'eleve' : 'sport-co',
     teamSize: config?.teamSize || 3,
     organization: 'pools',
-    rotatingReferee: Boolean(source.rotatingReferee),
+    rotatingReferee: source?.sport === 'raquette' && source?.format === 'ladder'
+      ? ladderArbitratedFields.length > 0
+      : Boolean(source.rotatingReferee),
     scoreTable: Boolean(source.scoreTable),
     challengeRange: clampNumber(Number(source.challengeRange) || 5, 1, 10, 5),
     poolSize: clampNumber(Number(source.poolSize) || 4, 3, 6, 4),
+    ladderArbitratedFields,
+    challengeInitialRanking: source?.sport === 'raquette' && source?.format === 'challenge'
+      ? resolveChallengeInitialRankingForSource(source).map(entry => ({
+          rank: entry.rank,
+          name: entry.name,
+        }))
+      : [],
+    ladderInitialSlots: source?.sport === 'raquette' && source?.format === 'ladder'
+      ? resolveLadderInitialSlotsForSource(source).map(slot => ({
+          field: slot.field,
+          home: slot.home,
+          away: slot.away,
+          referee: slot.referee,
+          hasReferee: slot.hasReferee,
+        }))
+      : [],
   };
 }
 
@@ -2775,6 +3751,9 @@ function getSimulationRating(score) {
 }
 
 function createTeamsForDraft(source, options) {
+  if (options.sport === 'raquette' && options.format === 'challenge') {
+    return resolveChallengeInitialRankingForSource(source).map(entry => entry.name).filter(Boolean);
+  }
   const config = getSelectedConfigurationForSource(source);
   if (options.sport === 'sport-co' && options.format !== 'rotating-teams') {
     const teamCount = config?.teamCount || 4;
@@ -2797,7 +3776,8 @@ function buildSimulationReport(source = state.draft) {
   const availableMinutes = availableWindowResult.availableMinutes;
   const invertedWarning = Boolean(availableWindowResult.invertedWarning);
   const possibleRotations = availableMinutes == null ? null : Math.max(0, Math.floor(availableMinutes / Math.max(options.duration, 1)));
-  const simultaneousUnits = Math.min(unitCount, Math.max(1, options.fields) * 2);
+  const ladderCapacityBonus = draft.format === 'ladder' ? options.ladderArbitratedFields.length : 0;
+  const simultaneousUnits = Math.min(unitCount, Math.max(1, options.fields) * 2 + ladderCapacityBonus);
   const waitingUnits = Math.max(unitCount - simultaneousUnits, 0);
   let schedule = null;
   let scheduleError = null;
@@ -2856,6 +3836,11 @@ function buildSimulationReport(source = state.draft) {
   }
 
   if (teamBased) {
+    const recommendedConfig = getSelectedConfigurationForSource(draft);
+    if (recommendedConfig) {
+      recommendations.push(`Configuration EPS conseillée : ${recommendedConfig.teamCount} équipes — ${recommendedConfig.composition}.`);
+      recommendations.push(recommendedConfig.explanation);
+    }
     recommendations.push(
       waitingUnits > 0
         ? 'Si une équipe est au repos, elle peut aider pour l’arbitrage ou la table.'
@@ -2976,6 +3961,20 @@ function hideSimulationPanel() {
   dom.simulationPanel.innerHTML = '';
 }
 
+function renderHelpTabs(activeTab = runtime.helpTab || 'start') {
+  runtime.helpTab = activeTab;
+  document.querySelectorAll('[data-help-tab]').forEach(button => {
+    const isActive = button.dataset.helpTab === activeTab;
+    button.classList.toggle('is-active', isActive);
+    button.setAttribute('aria-selected', isActive ? 'true' : 'false');
+  });
+  document.querySelectorAll('[data-help-panel]').forEach(panel => {
+    const isActive = panel.dataset.helpPanel === activeTab;
+    panel.classList.toggle('is-active', isActive);
+    panel.hidden = !isActive;
+  });
+}
+
 function simulateCurrentDraft() {
   const report = buildSimulationReport(state.draft);
   renderSimulationPanel(report);
@@ -2994,10 +3993,71 @@ function createTeamsForLaunch(options) {
   return createTeamsForDraft(state.draft, options);
 }
 
+function validateDraftBeforeLaunch(options, teams) {
+  if (options.format === 'challenge') {
+    const validation = getChallengePlacementValidation(state.draft);
+    if (validation.duplicates.length || validation.unknown.length || validation.unplaced.length || validation.assigned.length !== validation.players.length) {
+      return {
+        valid: false,
+        message: [
+          validation.unplaced.length ? `${validation.unplaced.length} élève${validation.unplaced.length > 1 ? 's non placés' : ' non placé'}` : '',
+          validation.duplicates.length ? `Doublons : ${validation.duplicates.map(formatDisplayName).join(', ')}` : '',
+        ].filter(Boolean).join(' · '),
+      };
+    }
+    const rankingNames = validation.ranking.map(entry => entry.name).filter(Boolean);
+    const knownPlayers = new Set(teams);
+    const invalidPlayers = rankingNames.filter(name => !knownPlayers.has(name));
+    if (invalidPlayers.length) {
+      return {
+        valid: false,
+        message: `Noms hors liste : ${[...new Set(invalidPlayers)].map(formatDisplayName).join(', ')}`,
+      };
+    }
+    return { valid: true };
+  }
+  if (options.format !== 'ladder') {
+    return { valid: true };
+  }
+  const validation = getLadderPlacementValidation(state.draft);
+  const activeFieldCount = validation.slots.filter(slot => slot.home && slot.away && (!slot.hasReferee || slot.referee)).length;
+  const requiredArbitrated = validation.arbitratedFields.filter(field => {
+    const slot = validation.slots.find(entry => entry.field === field);
+    return !slot || !slot.home || !slot.away || !slot.referee;
+  });
+  if (validation.duplicates.length || validation.unknown.length || validation.partialFields.length || requiredArbitrated.length || validation.unplaced.length || activeFieldCount === 0) {
+    return {
+      valid: false,
+      message: [
+        activeFieldCount === 0 ? 'Aucun terrain Ladder complet au lancement.' : '',
+        validation.unplaced.length ? `${validation.unplaced.length} élève${validation.unplaced.length > 1 ? 's non placés' : ' non placé'}` : '',
+        validation.duplicates.length ? `Doublons : ${validation.duplicates.map(formatDisplayName).join(', ')}` : '',
+        validation.partialFields.length ? `Terrains incomplets : ${validation.partialFields.map(field => `T${field}`).join(', ')}` : '',
+        requiredArbitrated.length ? `Terrains arbitres à compléter : ${requiredArbitrated.map(field => `T${field}`).join(', ')}` : '',
+      ].filter(Boolean).join(' · '),
+    };
+  }
+  const knownPlayers = new Set(teams);
+  const invalidPlayers = validation.slots.flatMap(slot => [slot.home, slot.away, slot.referee].filter(Boolean)).filter(name => !knownPlayers.has(name));
+  if (invalidPlayers.length) {
+    return {
+      valid: false,
+      message: `Noms hors liste : ${[...new Set(invalidPlayers)].map(formatDisplayName).join(', ')}`,
+    };
+  }
+  return { valid: true };
+}
+
 async function launchTournament() {
   try {
     const options = buildLaunchOptions();
     const teams = createTeamsForLaunch(options);
+    const draftValidation = validateDraftBeforeLaunch(options, teams);
+    if (!draftValidation.valid) {
+      const setupLabel = options.format === 'challenge' ? 'Classement Défi incomplet.' : 'Placement Ladder incomplet.';
+      window.alert(`${setupLabel} ${draftValidation.message}`);
+      return;
+    }
     const schedule = generateSchedule(teams, options);
     const session = {
       id: uniqueId('session'),
@@ -3020,11 +4080,14 @@ async function launchTournament() {
         rotatingReferee: options.rotatingReferee,
         scoreTable: options.scoreTable,
         challengeRange: options.challengeRange,
+        challengeInitialRanking: cloneData(options.challengeInitialRanking || []),
+        ladderArbitratedFields: cloneData(options.ladderArbitratedFields || []),
+        ladderInitialSlots: cloneData(options.ladderInitialSlots || []),
       },
       completed: false,
     };
     if (session.format === 'challenge') {
-      session.challengeOrder = session.schedule.teams.map(t => t.name);
+      session.challengeOrder = (options.challengeInitialRanking || []).map(entry => entry.name).filter(Boolean);
       session.challengeLog = [];
       session.options.challengeRange = options.challengeRange || 5;
     }
@@ -3147,6 +4210,28 @@ function validateZeroScore(matchId) {
   renderLiveView();
 }
 
+function setLadderOutcome(matchId, winnerSide) {
+  const session = state.currentSession;
+  if (!session || session.format !== 'ladder') return;
+  if (winnerSide !== 'home' && winnerSide !== 'away') return;
+  session.scores[matchId] = createExplicitScoreRecord(
+    winnerSide === 'home' ? 1 : 0,
+    winnerSide === 'away' ? 1 : 0
+  );
+  saveSessionLocally(session);
+  renderLiveView();
+}
+
+function clearLadderOutcome(matchId) {
+  const session = state.currentSession;
+  if (!session || session.format !== 'ladder') return;
+  const rotation = getCurrentRotation(session);
+  if (!rotation || !rotation.matches.some(match => match.id === matchId)) return;
+  delete session.scores[matchId];
+  saveSessionLocally(session);
+  renderLiveView();
+}
+
 function setRotatingOutcome(matchId, outcome) {
   const session = state.currentSession;
   if (!session) return;
@@ -3191,6 +4276,112 @@ function renderRankingDrawer(session) {
   dom.liveRankingContent.innerHTML = renderStandingsTable(session, standings);
 }
 
+function applyChallengeResult(session, challengerIdx, targetIdx, scores) {
+  if (!session || !Array.isArray(session.challengeOrder)) return session;
+  const co = session.challengeOrder;
+  const challengerName = co[challengerIdx];
+  const targetName = co[targetIdx];
+  if (!challengerName || !targetName) return session;
+  const safeScores = {
+    home: Math.max(0, Number(scores?.home) || 0),
+    away: Math.max(0, Number(scores?.away) || 0),
+  };
+  const isDraw = safeScores.home === safeScores.away;
+  const challengerWon = !isDraw && safeScores.away > safeScores.home;
+  session.challengeLog.push({
+    challenger: challengerName,
+    target: targetName,
+    challengerRank: challengerIdx + 1,
+    targetRank: targetIdx + 1,
+    challengerScore: safeScores.away,
+    targetScore: safeScores.home,
+    challengerWon,
+    isDraw,
+    ts: Date.now(),
+  });
+  if (challengerWon) {
+    const newOrder = [...co];
+    newOrder[targetIdx] = challengerName;
+    newOrder[challengerIdx] = targetName;
+    session.challengeOrder = newOrder;
+  }
+  return session;
+}
+
+function getChallengeOpponentIndexes(orderLength, selectedIdx, challengeRange) {
+  if (!Number.isInteger(orderLength) || orderLength <= 1) return [];
+  if (!Number.isInteger(selectedIdx) || selectedIdx < 0 || selectedIdx >= orderLength) return [];
+  const safeRange = clampNumber(Number(challengeRange) || 0, 0, orderLength - 1, 0);
+  const minIndex = Math.max(0, selectedIdx - safeRange);
+  const maxIndex = Math.min(orderLength - 1, selectedIdx + safeRange);
+  const opponents = [];
+  for (let idx = minIndex; idx <= maxIndex; idx += 1) {
+    if (idx !== selectedIdx) opponents.push(idx);
+  }
+  return opponents;
+}
+
+function applyChallengeWinner(session, firstIdx, secondIdx, winnerIdx) {
+  if (!session || !Array.isArray(session.challengeOrder)) return session;
+  if (firstIdx === secondIdx) return session;
+  const challengerIdx = Math.max(firstIdx, secondIdx);
+  const targetIdx = Math.min(firstIdx, secondIdx);
+  const challengerWon = winnerIdx === challengerIdx;
+  return applyChallengeResult(session, challengerIdx, targetIdx, {
+    home: challengerWon ? 0 : 1,
+    away: challengerWon ? 1 : 0,
+  });
+}
+
+function formatChallengeStatsLine(row) {
+  if (!row) return '0 défi · 0 pt';
+  const defis = row.played || 0;
+  const points = row.points || 0;
+  if (!defis) return '0 défi · 0 pt';
+  return `${defis} défi${defis > 1 ? 's' : ''} · ${points} pt${points > 1 ? 's' : ''} · ${row.pointsFor || 0}/${row.pointsAgainst || 0}`;
+}
+
+function buildChallengeListMarkup(session, challengeRange) {
+  const order = Array.isArray(session.challengeOrder) && session.challengeOrder.length
+    ? session.challengeOrder
+    : session.schedule.teams.map(t => t.name);
+  const standings = computeStandings(session);
+  const statsByName = new Map(standings.map(row => [row.name, row]));
+  return order.map((name, idx) => `
+    <button class="challenge-row challenge-row-compact" type="button" data-challenge-index="${idx}" title="Rang ${idx + 1} — match autorisé dans la plage ±${challengeRange}">
+      <span class="challenge-rank">${idx + 1}</span>
+      <span class="challenge-copy">
+        <span class="challenge-name">${escapeHtml(formatDisplayName(name))}</span>
+        <span class="challenge-stats">${escapeHtml(formatChallengeStatsLine(statsByName.get(name)))}</span>
+      </span>
+      <span class="challenge-action">${idx === 0 ? '' : '⚔️'}</span>
+    </button>
+  `).join('');
+}
+
+function getChallengeGridLayout(participantCount) {
+  const safeCount = Math.max(1, Number(participantCount) || 1);
+  return {
+    desktopColumns: 3,
+    tabletColumns: 2,
+    mobileColumns: 1,
+    desktopRows: Math.ceil(safeCount / 3),
+    tabletRows: Math.ceil(safeCount / 2),
+    mobileRows: safeCount,
+  };
+}
+
+function toggleChallengeLiveMode(enabled) {
+  const liveView = document.getElementById('view-live');
+  const liveHeader = document.getElementById('liveHeader');
+  const liveFooter = document.querySelector('#view-live .footer-actions.split');
+  const finishBtn = document.getElementById('finishTournamentBtn');
+  [liveView, liveHeader, liveFooter, dom.liveMatches, finishBtn].forEach(node => {
+    if (!node || !node.classList) return;
+    node.classList.toggle('challenge-live-mode', Boolean(enabled));
+  });
+}
+
 function getRoleBadgeStyle(role) {
   if (role === 'Arbitre') return 'background:rgba(249,115,22,0.14);color:#c2410c;border:1px solid rgba(249,115,22,0.3);';
   if (role === 'Table') return 'background:rgba(59,130,246,0.14);color:#1d4ed8;border:1px solid rgba(59,130,246,0.3);';
@@ -3210,14 +4401,18 @@ function getUnavailableRotationRoles(rotation, byeAssignments, enabledRoles) {
 
 function renderByeAssignmentsBlock(assignments, session) {
   if (!Array.isArray(assignments) || !assignments.length) return '';
-  const participantLabel = getParticipantLabel(session, assignments.length);
-  return `<div style="margin-top:16px;padding:14px 16px;border-radius:16px;background:#fef9c3;border:1px solid #ca8a04;color:#92400e;font-weight:600;">
-    ⚠️ ${participantLabel} au repos cette rotation :
-    <div style="display:grid;gap:8px;margin-top:10px;">
+  const restCount = assignments.length;
+  const restLine = `${restCount} ${getParticipantLabel(session, restCount).toLowerCase()} en repos actif cette ${session?.format === 'swiss' ? 'ronde' : 'rotation'}.`;
+  const roleLine = assignments.map(entry => entry.role).filter(Boolean).join(' / ');
+  return `<div class="live-rest-card">
+    <p class="live-rest-title">Repos actif</p>
+    <p class="live-rest-summary">${escapeHtml(restLine)}</p>
+    <p class="live-rest-role-line">Rôle proposé : ${escapeHtml(roleLine)}</p>
+    <div class="live-rest-assignments">
       ${assignments.map(entry => `
-        <div style="display:flex;flex-wrap:wrap;align-items:center;gap:8px;">
+        <div class="live-rest-item">
+          <span class="live-rest-role">${escapeHtml(entry.role)} :</span>
           <strong>${escapeHtml(session && session.sport === 'sport-co' && session.format !== 'rotating-teams' ? entry.name : formatDisplayName(entry.name))}</strong>
-          <span style="display:inline-flex;align-items:center;justify-content:center;padding:4px 10px;border-radius:999px;font-size:0.8rem;font-weight:700;${getRoleBadgeStyle(entry.role)}">${escapeHtml(entry.role)}</span>
         </div>
       `).join('')}
     </div>
@@ -3279,13 +4474,51 @@ function renderLiveMatches(session) {
     }
     const displayHome = session.sport === 'raquette' ? formatDisplayName(participants.home) : participants.home;
     const displayAway = session.sport === 'raquette' ? formatDisplayName(participants.away) : participants.away;
+    if (session.format === 'ladder') {
+      const winnerSide = complete && record.home !== record.away
+        ? (record.home > record.away ? 'home' : 'away')
+        : '';
+      const winnerLabel = winnerSide === 'home' ? displayHome : winnerSide === 'away' ? displayAway : '';
+      const hasLegacyDraw = complete && record.home === record.away;
+      const resultButtons = `
+        <div class="team-result-stack ladder-result-stack">
+          <button class="team-result-btn ${winnerSide === 'home' ? 'selected' : ''}" type="button" data-ladder-result="home" data-match-id="${match.id}" ${editable && !participants.unresolved && !complete ? '' : 'disabled'}>${escapeHtml(displayHome)} gagne</button>
+          <button class="team-result-btn ${winnerSide === 'away' ? 'selected' : ''}" type="button" data-ladder-result="away" data-match-id="${match.id}" ${editable && !participants.unresolved && !complete ? '' : 'disabled'}>${escapeHtml(displayAway)} gagne</button>
+        </div>
+      `;
+      const correctionAction = complete && editable
+        ? `<div class="live-card-actions"><button class="btn btn-secondary btn-sm" type="button" data-ladder-clear="${match.id}">Corriger</button></div>`
+        : '';
+      const extraInfo = [
+        match.ladderReferee ? `<p style="margin:10px 0 0;color:#c2410c;font-weight:700;">🟠 Arbitre : ${escapeHtml(formatDisplayName(match.ladderReferee))}</p>` : '',
+        winnerLabel ? `<p class="score-status-badge ladder-win">✓ ${escapeHtml(winnerLabel)} gagne</p>` : '',
+        hasLegacyDraw ? '<p class="score-status-badge ladder-alert">Résultat nul déjà enregistré</p>' : '',
+      ].filter(Boolean).join('');
+      return `
+        <article class="live-card ${complete ? 'live-card--validated' : 'live-card--incomplete'}">
+          <div class="live-card-head">
+            <div>
+              <p class="section-kicker">Terrain ${match.field}</p>
+              ${terrainBadge}
+              <h3>${escapeHtml(subtitle)}</h3>
+            </div>
+          </div>
+          <div class="rotating-side">${escapeHtml(displayHome)}</div>
+          <div class="vs-badge">contre</div>
+          <div class="rotating-side">${escapeHtml(displayAway)}</div>
+          ${resultButtons}
+          ${correctionAction}
+          ${extraInfo}
+        </article>
+      `;
+    }
     const homeScore = record ? record.home : '—';
     const awayScore = record ? record.away : '—';
     const zeroValidated = complete && record.home === 0 && record.away === 0;
     const extraInfo = [
-      match.referee ? `<p style="margin:10px 0 0;color:#c2410c;font-weight:700;">🟠 Arbitre : ${escapeHtml(match.referee)}</p>` : '',
+      match.referee ? `<p style="margin:8px 0 0;color:#c2410c;font-weight:700;font-size:0.88rem;">Arbitre : ${escapeHtml(session.sport === 'raquette' ? formatDisplayName(match.referee) : match.referee)}</p>` : '',
       match.ladderReferee ? `<p style="margin:10px 0 0;color:#c2410c;font-weight:700;">🟠 Arbitre : ${escapeHtml(formatDisplayName(match.ladderReferee))}</p>` : '',
-      match.swissNote ? `<p style="margin:10px 0 0;color:var(--text-soft);font-style:italic;">${escapeHtml(match.swissNote)}</p>` : '',
+      match.swissNote ? `<p class="live-match-note">${escapeHtml(match.swissNote)}</p>` : '',
       zeroValidated ? '<p class="score-status-badge confirmed-draw">0-0 validé</p>' : '',
     ].filter(Boolean).join('');
     return `
@@ -3362,47 +4595,28 @@ function renderChallengeLive(session) {
   session.challengeOrder = Array.isArray(session.challengeOrder) && session.challengeOrder.length
     ? session.challengeOrder
     : session.schedule.teams.map(t => t.name);
-  const order = session.challengeOrder;
+  const challengeLayout = getChallengeGridLayout(session.challengeOrder.length);
+  toggleChallengeLiveMode(true);
 
   dom.liveMatches.innerHTML = `
     <div class="challenge-board">
       <p id="challengeHint" style="color:var(--text-soft);margin-bottom:12px;min-height:1.4em;transition:color 0.2s;">
-        Tape sur un joueur pour voir contre qui il peut jouer.
+        Tape sur un joueur pour voir ses adversaires possibles dans la plage ±${challengeRange}.
       </p>
-      <div class="challenge-list" id="challengeList">
-        ${order.map((name, idx) => `
-          <button class="challenge-row" type="button" data-challenge-index="${idx}" title="Rang ${idx + 1} — peut défier jusqu'à ±${challengeRange} joueurs mieux classés">
-            <span class="challenge-rank">${idx + 1}</span>
-            <span class="challenge-name">${escapeHtml(formatDisplayName(name))}</span>
-            <span class="challenge-action">${idx === 0 ? '' : '⚔️'}</span>
-          </button>
-        `).join('')}
+      <div class="challenge-list challenge-list-dense" id="challengeList" style="--challenge-rows-desktop:${challengeLayout.desktopRows};--challenge-rows-tablet:${challengeLayout.tabletRows};--challenge-rows-mobile:${challengeLayout.mobileRows};">
+        ${buildChallengeListMarkup(session, challengeRange)}
       </div>
     </div>
-    <div class="challenge-modal hidden" id="challengeModal">
+    <div class="challenge-modal challenge-result-modal hidden" id="challengeModal">
       <div class="challenge-modal-inner">
+        <p class="section-kicker">Résultat du défi</p>
         <h3 id="challengerTitle"></h3>
         <p id="challengeTargetLabel"></p>
-        <div class="challenge-score-form hidden" id="challengeScoreForm">
-          <div class="score-row" style="max-width:320px;margin:0 auto">
-            <div class="score-name" id="challengeHomeName"></div>
-            <button class="score-btn" type="button" id="challengeHomeMin">−</button>
-            <div class="score-value" id="challengeHomeVal">0</div>
-            <button class="score-btn" type="button" id="challengeHomePlus">+</button>
-            <div></div>
-          </div>
-          <div class="vs-badge">──</div>
-          <div class="score-row" style="max-width:320px;margin:0 auto">
-            <div class="score-name" id="challengeAwayName"></div>
-            <button class="score-btn" type="button" id="challengeAwayMin">−</button>
-            <div class="score-value" id="challengeAwayVal">0</div>
-            <button class="score-btn" type="button" id="challengeAwayPlus">+</button>
-            <div></div>
-          </div>
-          <div style="display:flex;gap:12px;margin-top:18px">
-            <button class="btn btn-primary btn-lg" type="button" id="challengeConfirmBtn" style="flex:1">✓ Valider</button>
-            <button class="btn btn-secondary btn-lg" type="button" id="challengeCancelBtn" style="flex:1">Annuler</button>
-          </div>
+        <p class="challenge-result-help">Si le joueur le moins bien classé gagne, il prend la place du joueur mieux classé.</p>
+        <div class="challenge-result-actions">
+          <button class="btn btn-primary btn-lg challenge-result-btn" type="button" id="challengeFirstWinBtn"></button>
+          <button class="btn btn-primary btn-lg challenge-result-btn" type="button" id="challengeSecondWinBtn"></button>
+          <button class="btn btn-secondary btn-lg challenge-result-btn" type="button" id="challengeCancelBtn">Annuler</button>
         </div>
       </div>
     </div>
@@ -3420,96 +4634,62 @@ function renderChallengeLive(session) {
     else if (highlightTimeout) { clearTimeout(highlightTimeout); highlightTimeout = null; }
     selectedChallengerIdx = null;
     document.querySelectorAll('#challengeList .challenge-row').forEach(btn => {
-      btn.classList.remove('challenge-selected', 'challenge-target', 'challenge-challenger', 'challenge-dimmed');
+      btn.classList.remove('challenge-selected', 'challenge-target', 'challenge-challenger', 'challenge-dimmed', 'challenge-row-selected', 'challenge-row-available', 'challenge-row-unavailable');
     });
     const hint = document.getElementById('challengeHint');
     if (hint) {
-      hint.textContent = 'Tape sur un joueur pour voir contre qui il peut jouer.';
+      hint.textContent = `Tape sur un joueur pour voir ses adversaires possibles dans la plage ±${challengeRange}.`;
       hint.style.color = 'var(--text-soft)';
     }
   }
 
-  function openScoreModal(challengerIdx, targetIdx) {
+  function openResultModal(firstIdx, secondIdx) {
     clearHighlight();
     const currentOrder = session.challengeOrder;
-    const challengerName = currentOrder[challengerIdx];
-    const targetName = currentOrder[targetIdx];
+    const firstName = currentOrder[firstIdx];
+    const secondName = currentOrder[secondIdx];
     const modal = document.getElementById('challengeModal');
-    const scoreForm = document.getElementById('challengeScoreForm');
     const challengerTitle = document.getElementById('challengerTitle');
     const challengeTargetLabel = document.getElementById('challengeTargetLabel');
-    const challengeHomeName = document.getElementById('challengeHomeName');
-    const challengeAwayName = document.getElementById('challengeAwayName');
-    const challengeHomeVal = document.getElementById('challengeHomeVal');
-    const challengeAwayVal = document.getElementById('challengeAwayVal');
-    const challengeHomeMin = document.getElementById('challengeHomeMin');
-    const challengeHomePlus = document.getElementById('challengeHomePlus');
-    const challengeAwayMin = document.getElementById('challengeAwayMin');
-    const challengeAwayPlus = document.getElementById('challengeAwayPlus');
-    const challengeConfirmBtn = document.getElementById('challengeConfirmBtn');
+    const challengeFirstWinBtn = document.getElementById('challengeFirstWinBtn');
+    const challengeSecondWinBtn = document.getElementById('challengeSecondWinBtn');
     const challengeCancelBtn = document.getElementById('challengeCancelBtn');
-    if (!modal || !scoreForm || !challengerTitle || !challengeTargetLabel || !challengeHomeName || !challengeAwayName || !challengeHomeVal || !challengeAwayVal || !challengeHomeMin || !challengeHomePlus || !challengeAwayMin || !challengeAwayPlus || !challengeConfirmBtn || !challengeCancelBtn) {
+    if (!modal || !challengerTitle || !challengeTargetLabel || !challengeFirstWinBtn || !challengeSecondWinBtn || !challengeCancelBtn) {
       console.warn('[renderChallengeLive] Éléments de la modale défi introuvables.');
       return;
     }
-    challengerTitle.textContent = `${formatDisplayName(challengerName)} (rang ${challengerIdx + 1})`;
-    challengeTargetLabel.textContent = `contre ${formatDisplayName(targetName)} (rang ${targetIdx + 1})`;
-    challengeHomeName.textContent = formatDisplayName(targetName);
-    challengeAwayName.textContent = formatDisplayName(challengerName);
-    challengeHomeVal.textContent = '0';
-    challengeAwayVal.textContent = '0';
-    scoreForm.classList.remove('hidden');
+    challengerTitle.textContent = `${formatDisplayName(firstName)} (rang ${firstIdx + 1}) contre ${formatDisplayName(secondName)} (rang ${secondIdx + 1})`;
+    challengeTargetLabel.textContent = 'Choisis directement le vainqueur du défi.';
+    challengeFirstWinBtn.textContent = `Victoire de ${formatDisplayName(firstName)}`;
+    challengeSecondWinBtn.textContent = `Victoire de ${formatDisplayName(secondName)}`;
     modal.classList.remove('hidden');
 
-    let scores = { home: 0, away: 0 };
-    const updateVal = (side, step) => {
-      scores[side] = Math.max(0, (scores[side] || 0) + step);
-      const targetValue = side === 'home' ? challengeHomeVal : challengeAwayVal;
-      targetValue.textContent = scores[side];
-    };
-    challengeHomeMin.onclick = () => updateVal('home', -1);
-    challengeHomePlus.onclick = () => updateVal('home', 1);
-    challengeAwayMin.onclick = () => updateVal('away', -1);
-    challengeAwayPlus.onclick = () => updateVal('away', 1);
-
-    challengeConfirmBtn.onclick = () => {
-      const co = session.challengeOrder;
-      const isDraw = scores.home === scores.away;
-      const challengerWon = !isDraw && scores.away > scores.home;
-      session.challengeLog.push({
-        challenger: challengerName,
-        target: targetName,
-        challengerRank: challengerIdx + 1,
-        targetRank: targetIdx + 1,
-        challengerScore: scores.away,
-        targetScore: scores.home,
-        challengerWon,
-        isDraw,
-        ts: Date.now(),
-      });
-      if (challengerWon) {
-        const newOrder = [...co];
-        newOrder[targetIdx] = challengerName;
-        newOrder[challengerIdx] = targetName;
-        session.challengeOrder = newOrder;
-      }
+    const commitResult = winnerIdx => {
+      applyChallengeWinner(session, firstIdx, secondIdx, winnerIdx);
       modal.classList.add('hidden');
       autoSave();
       renderChallengeLive(session);
-      if (isDraw) {
-        const hint = document.getElementById('challengeHint');
-        if (hint) {
-          hint.textContent = 'Match nul — les rangs restent inchangés.';
-          hint.style.color = 'var(--text-soft)';
-          window._challengeHighlightTimeout = highlightTimeout = setTimeout(() => {
-            const nextHint = document.getElementById('challengeHint');
-            if (nextHint) {
-              nextHint.textContent = 'Tape sur un joueur pour voir contre qui il peut jouer.';
-              nextHint.style.color = 'var(--text-soft)';
-            }
-          }, 3000);
-        }
+      renderRankingDrawer(session);
+      const winnerName = session.challengeOrder.includes(currentOrder[winnerIdx]) ? currentOrder[winnerIdx] : (winnerIdx === firstIdx ? firstName : secondName);
+      const hint = document.getElementById('challengeHint');
+      if (hint) {
+        hint.textContent = `${formatDisplayName(winnerName)} remporte le défi.`;
+        hint.style.color = 'var(--accent-dark)';
+        window._challengeHighlightTimeout = highlightTimeout = setTimeout(() => {
+          const nextHint = document.getElementById('challengeHint');
+          if (nextHint) {
+            nextHint.textContent = `Tape sur un joueur pour voir ses adversaires possibles dans la plage ±${challengeRange}.`;
+            nextHint.style.color = 'var(--text-soft)';
+          }
+        }, 3000);
       }
+    };
+
+    challengeFirstWinBtn.onclick = () => {
+      commitResult(firstIdx);
+    };
+    challengeSecondWinBtn.onclick = () => {
+      commitResult(secondIdx);
     };
 
     challengeCancelBtn.onclick = () => {
@@ -3527,8 +4707,8 @@ function renderChallengeLive(session) {
     if (!btn) return;
     const clickedIdx = Number(btn.dataset.challengeIndex);
 
-    if (btn.classList.contains('challenge-target') && selectedChallengerIdx !== null) {
-      openScoreModal(selectedChallengerIdx, clickedIdx);
+    if (btn.classList.contains('challenge-row-available') && selectedChallengerIdx !== null) {
+      openResultModal(selectedChallengerIdx, clickedIdx);
       return;
     }
 
@@ -3537,52 +4717,35 @@ function renderChallengeLive(session) {
       return;
     }
 
-    if (clickedIdx === 0) {
-      const hint = document.getElementById('challengeHint');
-      if (hint) {
-        const maxChallenger = Math.min(session.challengeOrder.length, challengeRange + 1);
-        hint.textContent = maxChallenger > 1
-          ? `${formatDisplayName(session.challengeOrder[0])} est en tête — il ne peut défier personne. Peut être défié par rangs 2→${maxChallenger}.`
-          : `${formatDisplayName(session.challengeOrder[0])} est en tête — personne à défier.`;
-        hint.style.color = 'var(--text-soft)';
-      }
-      window._challengeHighlightTimeout = highlightTimeout = setTimeout(() => {
-        const h = document.getElementById('challengeHint');
-        if (h) { h.textContent = 'Tape sur un joueur pour voir contre qui il peut jouer.'; h.style.color = 'var(--text-soft)'; }
-      }, 2000);
-      return;
-    }
-
     selectedChallengerIdx = clickedIdx;
-    const minTarget = Math.max(0, clickedIdx - challengeRange);
-    const maxTarget = clickedIdx - 1;
-    const minChallenger = clickedIdx + 1;
-    const maxChallenger = Math.min(session.challengeOrder.length - 1, clickedIdx + challengeRange);
+    const availableIndexes = new Set(getChallengeOpponentIndexes(session.challengeOrder.length, clickedIdx, challengeRange));
 
     document.querySelectorAll('#challengeList .challenge-row').forEach((rowBtn, idx) => {
-      rowBtn.classList.remove('challenge-selected', 'challenge-target', 'challenge-challenger', 'challenge-dimmed');
+      rowBtn.classList.remove('challenge-selected', 'challenge-target', 'challenge-challenger', 'challenge-dimmed', 'challenge-row-selected', 'challenge-row-available', 'challenge-row-unavailable');
       if (idx === clickedIdx) {
-        rowBtn.classList.add('challenge-selected');
-      } else if (idx >= minTarget && idx <= maxTarget) {
-        rowBtn.classList.add('challenge-target');
-      } else if (idx >= minChallenger && idx <= maxChallenger) {
-        rowBtn.classList.add('challenge-challenger');
+        rowBtn.classList.add('challenge-selected', 'challenge-row-selected');
+      } else if (availableIndexes.has(idx)) {
+        rowBtn.classList.add('challenge-target', 'challenge-row-available');
       } else {
-        rowBtn.classList.add('challenge-dimmed');
+        rowBtn.classList.add('challenge-dimmed', 'challenge-row-unavailable');
       }
     });
 
     const hint = document.getElementById('challengeHint');
     if (hint) {
-      const targetText = maxTarget >= minTarget ? `${minTarget + 1}→${maxTarget + 1}` : 'aucun';
-      const challengerText = maxChallenger >= minChallenger ? `${minChallenger + 1}→${maxChallenger + 1}` : 'aucun';
-      hint.textContent = `${formatDisplayName(session.challengeOrder[clickedIdx])} peut défier rangs ${targetText} · Peut être défié par rangs ${challengerText}`;
-      hint.style.color = 'var(--accent-dark)';
+      if (availableIndexes.size) {
+        const ranks = [...availableIndexes].map(idx => idx + 1).join(', ');
+        hint.textContent = `${formatDisplayName(session.challengeOrder[clickedIdx])} peut jouer contre les rangs ${ranks}.`;
+        hint.style.color = '#2563eb';
+      } else {
+        hint.textContent = `${formatDisplayName(session.challengeOrder[clickedIdx])} n'a aucun adversaire disponible dans la plage ±${challengeRange}.`;
+        hint.style.color = 'var(--text-soft)';
+      }
     }
 
     window._challengeHighlightTimeout = highlightTimeout = setTimeout(() => {
       clearHighlight();
-    }, 8000);
+    }, 3000);
   });
 }
 
@@ -3595,6 +4758,7 @@ function renderLiveView() {
     return;
   }
   if (session.format === 'challenge') {
+    toggleChallengeLiveMode(true);
     renderChallengeLive(session);
     const timerCard = document.querySelector('.timer-card');
     if (timerCard) timerCard.style.display = 'none';
@@ -3603,6 +4767,7 @@ function renderLiveView() {
     if (rotationStatusBanner) rotationStatusBanner.className = 'rotation-status-banner hidden';
     return;
   }
+  toggleChallengeLiveMode(false);
   const timerCard = document.querySelector('.timer-card');
   if (timerCard) timerCard.style.display = '';
   if (dom.prevRotationBtn) dom.prevRotationBtn.style.display = '';
@@ -3643,9 +4808,9 @@ function appendNextLadderRotation(session) {
   if (!currentRotation) return false;
   const nextNumber = session.schedule.rotations.length + 1;
   if (nextNumber > session.schedule.ladder.rotationTarget) return false;
-  const useReferees = Boolean(session.options.rotatingReferee);
   const allPlayers = session.schedule.teams.map(t => t.name);
-  const currentSlots = currentRotation.ladderSlots || [];
+  const currentSlots = [...(currentRotation.ladderSlots || [])].sort((left, right) => left.field - right.field);
+  const useFixedArbitratedFields = currentSlots.some(slot => slot.hasReferee);
 
   const results = currentSlots.map(slot => {
     const match = currentRotation.matches.find(m => m.field === slot.field);
@@ -3668,197 +4833,18 @@ function appendNextLadderRotation(session) {
       draw: scored && record.home === record.away,
     };
   });
-
-  const arbitratedResults = results.filter(r => r.hasReferee);
-  const freeResults = results.filter(r => !r.hasReferee);
-  let nextSlots = [];
-
-  if (!useReferees) {
-    const slotBuffer = Array(freeResults.length).fill(null);
-    let segmentStart = 0;
-
-    while (segmentStart < freeResults.length) {
-      if (freeResults[segmentStart].draw || !freeResults[segmentStart].winner || !freeResults[segmentStart].loser) {
-        const curr = freeResults[segmentStart];
-        slotBuffer[segmentStart] = {
-          field: curr.field,
-          home: curr.home,
-          away: curr.away,
-          referee: null,
-          hasReferee: false,
-        };
-        segmentStart += 1;
-        continue;
-      }
-
-      let segmentEnd = segmentStart;
-      while (
-        segmentEnd + 1 < freeResults.length
-        && !freeResults[segmentEnd + 1].draw
-        && freeResults[segmentEnd + 1].winner
-        && freeResults[segmentEnd + 1].loser
-      ) {
-        segmentEnd += 1;
-      }
-
-      for (let index = segmentStart; index <= segmentEnd; index += 1) {
-        const curr = freeResults[index];
-        const localIndex = index - segmentStart;
-        const segmentLength = segmentEnd - segmentStart + 1;
-
-        if (segmentLength === 1) {
-          slotBuffer[index] = {
-            field: curr.field,
-            home: curr.winner,
-            away: curr.loser,
-            referee: null,
-            hasReferee: false,
-          };
-          continue;
-        }
-
-        if (localIndex === 0) {
-          slotBuffer[index] = {
-            field: curr.field,
-            home: curr.winner,
-            away: freeResults[index + 1].winner,
-            referee: null,
-            hasReferee: false,
-          };
-          continue;
-        }
-
-        if (localIndex === segmentLength - 1) {
-          slotBuffer[index] = {
-            field: curr.field,
-            home: freeResults[index - 1].loser,
-            away: curr.loser,
-            referee: null,
-            hasReferee: false,
-          };
-          continue;
-        }
-
-        slotBuffer[index] = {
-          field: curr.field,
-          home: freeResults[index - 1].loser,
-          away: freeResults[index + 1].winner,
-          referee: null,
-          hasReferee: false,
-        };
-      }
-
-      segmentStart = segmentEnd + 1;
-    }
-
-    nextSlots = slotBuffer.filter(Boolean);
-  } else {
-    // === CONSTRUCTION DES SLOTS ARBITRÉS — logique ±1 stricte ===
-    for (let i = 0; i < arbitratedResults.length; i++) {
-      const curr = arbitratedResults[i];
-      const above = i > 0 ? arbitratedResults[i - 1] : null;
-      const below = i < arbitratedResults.length - 1 ? arbitratedResults[i + 1] : null;
-      const isTop = i === 0;
-
-      if (curr.draw) {
-        nextSlots.push({
-          field: curr.field,
-          home: curr.home,
-          away: curr.away,
-          referee: curr.referee,
-          hasReferee: true,
-        });
-        continue;
-      }
-
-      const nextReferee = isTop
-        ? curr.winner
-        : (below && !below.draw ? below.winner : (curr.loser || curr.away || curr.referee || null));
-      const nextHome = curr.referee;
-      const nextAway = isTop
-        ? (below && !below.draw ? below.winner : (curr.loser || curr.away || null))
-        : (above && !above.draw ? above.loser : (curr.winner || curr.home || null));
-
-      nextSlots.push({
-        field: curr.field,
-        home: nextHome || null,
-        away: nextAway || null,
-        referee: nextReferee || null,
-        hasReferee: true,
-      });
-    }
-
-    // === TERRAINS LIBRES (sans arbitre) — logique inchangée ===
-    for (let j = 0; j < freeResults.length; j++) {
-      const curr = freeResults[j];
-
-      if (curr.draw) {
-        nextSlots.push({
-          field: curr.field,
-          home: curr.home,
-          away: curr.away,
-          referee: null,
-          hasReferee: false,
-        });
-        continue;
-      }
-
-      nextSlots.push({
-        field: curr.field,
-        home: curr.referee || null,
-        away: curr.loser,
-        referee: null,
-        hasReferee: false,
-      });
-    }
-
-    // Propagation des gagnants dans la chaîne arbitrée (terrain i+1 → terrain i)
-    for (let i = 1; i < arbitratedResults.length; i++) {
-      const gagnant = arbitratedResults[i].draw ? null : arbitratedResults[i].winner;
-      if (!gagnant) continue;
-      const slotCible = nextSlots[i - 1];
-      if (slotCible && slotCible.home === null) {
-        slotCible.home = gagnant;
-      }
-    }
-
-    // Propagation indépendante pour les terrains libres
-    for (let j = 1; j < freeResults.length; j++) {
-      const gagnant = freeResults[j].draw ? null : freeResults[j].winner;
-      if (!gagnant) continue;
-      const slotCible = nextSlots[arbitratedResults.length + j - 1];
-      if (slotCible && slotCible.home === null) {
-        slotCible.home = gagnant;
-      }
-    }
-  }
-
-  // === REMPLISSAGE DES NULL PAR LE BENCH ===
-  const usedSoFar = new Set(
-    nextSlots.flatMap(s => [s.home, s.away, s.referee].filter(Boolean))
-  );
-  const entrants = allPlayers.filter(name => !usedSoFar.has(name));
-
-  for (let i = nextSlots.length - 1; i >= 0; i--) {
-    const slot = nextSlots[i];
-    if (slot.home === null && entrants.length) {
-      slot.home = entrants.shift();
-      usedSoFar.add(slot.home);
-    }
-    if (slot.away === null && entrants.length) {
-      slot.away = entrants.shift();
-      usedSoFar.add(slot.away);
-    }
-    if (slot.hasReferee && slot.referee === null && entrants.length) {
-      slot.referee = entrants.shift();
-      usedSoFar.add(slot.referee);
-    }
+  let nextSlots = useFixedArbitratedFields
+    ? buildNextFixedArbitratedLadderSlots(results)
+    : buildNextFreeLadderSlots(results);
+  if (!nextSlots) {
+    console.warn(`[appendNextLadderRotation] Impossible de construire la rotation ladder ${useFixedArbitratedFields ? 'avec terrains arbitres fixes' : 'sans arbitre fixe'} de manière cohérente.`);
+    return false;
   }
 
   const ladderMovement = validateLadderMovement({ ladderSlots: currentSlots }, nextSlots);
   if (!ladderMovement.valid) {
-    console.warn(`[validateLadderMovement] correction appliquée : ${ladderMovement.violations.map(entry => `${entry.name} T${entry.from}->T${entry.to}`).join(', ')}`);
-    nextSlots = currentSlots.map(slot => ({ ...slot }));
+    console.warn(`[validateLadderMovement] rotation ladder incohérente : ${ladderMovement.violations.map(entry => `${entry.name} T${entry.from}->T${entry.to}`).join(', ')}`);
+    return false;
   }
 
   const usedFinal = new Set(
@@ -3872,7 +4858,7 @@ function appendNextLadderRotation(session) {
   }
 
   const enabledRoles = getEnabledRolesFromOptions(session.options);
-  const byeAssignments = useReferees
+  const byeAssignments = useFixedArbitratedFields
     ? assignLadderByeAssignments(newBench, session.options)
     : assignRolesForByes(newBench, enabledRoles);
 
@@ -4123,6 +5109,21 @@ function exportCsv(session = state.currentSession) {
       return [rotation.number, match.field || '', formatCsvName(participants.home), formatCsvName(participants.away), record.home ?? '', record.away ?? ''].join(';');
     }).filter(Boolean)
   );
+  if (session.format === 'ladder') {
+    matchHeader = 'rotation;terrain;domicile;exterieur;resultat';
+    matchRows = session.schedule.rotations.flatMap(rotation =>
+      rotation.matches.map(match => {
+        const participants = resolveMatchParticipants(match, session);
+        const record = getScoreRecord(session, match.id);
+        if (!isScoreComplete(record)) return null;
+        const winner = record.home > record.away ? participants.home : record.away > record.home ? participants.away : '';
+        const resultLabel = winner
+          ? `Victoire ${formatCsvName(winner)}`
+          : 'Match nul';
+        return [rotation.number, match.field || '', formatCsvName(participants.home), formatCsvName(participants.away), resultLabel].join(';');
+      }).filter(Boolean)
+    );
+  }
   if (session.format === 'challenge') {
     matchHeader = 'ordre;nom;victoires;defaites;points_marques;points_encaisses';
     matchRows = standings.map((row, index) => [index + 1, formatCsvName(row.name), row.wins, row.losses, row.pointsFor, row.pointsAgainst].join(';'));
@@ -4582,6 +5583,7 @@ function handleGlobalClick(event) {
     state.draft.sport = sportButton.dataset.sport === 'raquette' ? 'raquette' : 'sport-co';
     state.draft.format = FORMAT_DEFINITIONS[state.draft.sport][0].id;
     state.draft.selectedConfigKey = '';
+    hideSimulationPanel();
     renderNewTournamentView();
     persistState();
     return;
@@ -4591,6 +5593,7 @@ function handleGlobalClick(event) {
   if (formatButton) {
     state.draft.format = formatButton.dataset.format;
     state.draft.selectedConfigKey = '';
+    hideSimulationPanel();
     renderNewTournamentView();
     persistState();
     return;
@@ -4599,8 +5602,25 @@ function handleGlobalClick(event) {
   const configButton = event.target.closest('[data-config-key]');
   if (configButton) {
     state.draft.selectedConfigKey = configButton.dataset.configKey;
+    hideSimulationPanel();
     renderNewTournamentView();
     persistState();
+    return;
+  }
+
+  const analysisConfigButton = event.target.closest('[data-analysis-config-key]');
+  if (analysisConfigButton) {
+    state.draft.selectedConfigKey = analysisConfigButton.dataset.analysisConfigKey;
+    state.draft.newStep = 4;
+    hideSimulationPanel();
+    renderNewTournamentView();
+    persistState();
+    return;
+  }
+
+  const helpTabButton = event.target.closest('[data-help-tab]');
+  if (helpTabButton) {
+    renderHelpTabs(helpTabButton.dataset.helpTab || 'start');
     return;
   }
 
@@ -4622,6 +5642,18 @@ function handleGlobalClick(event) {
     return;
   }
 
+  const ladderOutcomeButton = event.target.closest('[data-ladder-result]');
+  if (ladderOutcomeButton) {
+    setLadderOutcome(ladderOutcomeButton.dataset.matchId, ladderOutcomeButton.dataset.ladderResult);
+    return;
+  }
+
+  const ladderClearButton = event.target.closest('[data-ladder-clear]');
+  if (ladderClearButton) {
+    clearLadderOutcome(ladderClearButton.dataset.ladderClear);
+    return;
+  }
+
   const sessionAction = event.target.closest('[data-session-action]');
   if (sessionAction) {
     const { sessionId, sessionAction: action } = sessionAction.dataset;
@@ -4638,10 +5670,12 @@ function handleGlobalClick(event) {
   }
 
   if (event.target === dom.startNewTournamentBtn) {
+    state.draft.newStep = 1;
     showView('new');
     return;
   }
   if (event.target === dom.helpBtn) {
+    renderHelpTabs('start');
     dom.helpModal?.classList.remove('hidden');
     return;
   }
@@ -4661,6 +5695,48 @@ function handleGlobalClick(event) {
   }
   if (event.target === dom.simulateSessionBtn) {
     simulateCurrentDraft();
+    return;
+  }
+  if (event.target === dom.analysisModifyBtn) {
+    state.draft.newStep = 2;
+    renderNewTournamentView();
+    persistState();
+    return;
+  }
+  if (event.target === dom.skipNamesStepBtn) {
+    state.draft.newStep = 5;
+    renderNewTournamentView();
+    persistState();
+    return;
+  }
+  if (event.target === dom.ladderAlphaBtn) {
+    applyDraftLadderPlacementMode('alpha');
+    renderNewTournamentView();
+    persistState();
+    return;
+  }
+  if (event.target === dom.ladderRandomBtn) {
+    applyDraftLadderPlacementMode('random');
+    renderNewTournamentView();
+    persistState();
+    return;
+  }
+  if (event.target === dom.ladderManualBtn) {
+    applyDraftLadderPlacementMode('manual');
+    renderNewTournamentView();
+    persistState();
+    return;
+  }
+  if (event.target === dom.newStepPrevBtn) {
+    state.draft.newStep = clampDraftStep(state.draft.newStep - 1);
+    renderNewTournamentView();
+    persistState();
+    return;
+  }
+  if (event.target === dom.newStepNextBtn) {
+    state.draft.newStep = clampDraftStep(state.draft.newStep + 1);
+    renderNewTournamentView();
+    persistState();
     return;
   }
   if (event.target === dom.timerStartBtn) {
@@ -4704,6 +5780,7 @@ function handleGlobalClick(event) {
     return;
   }
   if (event.target === dom.openRankingBtn) {
+    if (state.currentSession) renderRankingDrawer(state.currentSession);
     dom.rankingDrawer.classList.remove('hidden');
     return;
   }
@@ -4731,18 +5808,21 @@ function handleGlobalInput(event) {
   if (event.target === dom.startTimeInput) {
     state.draft.startTime = event.target.value || '10:00';
     renderTimeSection();
+    renderNewTournamentSummary();
     persistState();
     return;
   }
   if (event.target === dom.endTimeInput) {
     state.draft.endTime = event.target.value || '11:00';
     renderTimeSection();
+    renderNewTournamentSummary();
     persistState();
     return;
   }
   if (event.target === dom.matchDurationInput) {
     state.draft.duration = clampNumber(Number(event.target.value) || 7, 1, 60, 7);
     renderTimeSection();
+    renderNewTournamentSummary();
     persistState();
     return;
   }
@@ -4753,6 +5833,36 @@ function handleGlobalInput(event) {
   }
   if (event.target === dom.studentNamesInput) {
     state.draft.studentNamesText = event.target.value;
+    renderLadderSetupSection();
+    renderChallengeSetupSection();
+    persistState();
+    return;
+  }
+  if (event.target.matches('[data-ladder-arb-field]')) {
+    const field = Number(event.target.dataset.ladderArbField);
+    const current = new Set(normalizeLadderArbitratedFieldsForSource(state.draft));
+    if (event.target.checked) current.add(field);
+    else current.delete(field);
+    state.draft.ladderArbitratedFields = [...current].sort((left, right) => left - right);
+    persistDraftLadderSlots(getDraftLadderInitialSlotsForSource(state.draft));
+    renderNewTournamentView();
+    persistState();
+    return;
+  }
+  if (event.target.matches('[data-ladder-slot-field][data-ladder-slot-role]')) {
+    const field = Number(event.target.dataset.ladderSlotField);
+    const role = event.target.dataset.ladderSlotRole;
+    setDraftLadderSlotValue(field, role, event.target.value);
+    renderLadderSetupSection();
+    renderNewTournamentSummary();
+    persistState();
+    return;
+  }
+  if (event.target.matches('[data-challenge-rank]')) {
+    const rank = Number(event.target.dataset.challengeRank);
+    setDraftChallengeRankValue(rank, event.target.value);
+    renderChallengeSetupSection();
+    renderNewTournamentSummary();
     persistState();
     return;
   }
@@ -4792,6 +5902,10 @@ function handleGlobalSubmit(event) {
   }
 }
 
+function handleGlobalChange(event) {
+  handleGlobalInput(event);
+}
+
 function handleStepperButtons() {
   addListenerIfPresent(dom.participantMinusBtn, 'click', () => {
     hideSimulationPanel();
@@ -4808,25 +5922,27 @@ function handleStepperButtons() {
   addListenerIfPresent(dom.fieldMinusBtn, 'click', () => {
     hideSimulationPanel();
     state.draft.fields = clampNumber(state.draft.fields - 1, 1, 20, 2);
-    renderTimeSection();
+    renderNewTournamentView();
     persistState();
   });
   addListenerIfPresent(dom.fieldPlusBtn, 'click', () => {
     hideSimulationPanel();
     state.draft.fields = clampNumber(state.draft.fields + 1, 1, 20, 2);
-    renderTimeSection();
+    renderNewTournamentView();
     persistState();
   });
   addListenerIfPresent(dom.durationMinusBtn, 'click', () => {
     hideSimulationPanel();
     state.draft.duration = clampNumber(state.draft.duration - 1, 1, 60, 7);
     renderTimeSection();
+    renderNewTournamentSummary();
     persistState();
   });
   addListenerIfPresent(dom.durationPlusBtn, 'click', () => {
     hideSimulationPanel();
     state.draft.duration = clampNumber(state.draft.duration + 1, 1, 60, 7);
     renderTimeSection();
+    renderNewTournamentSummary();
     persistState();
   });
   if (dom.challengeRangeMinusBtn) {
@@ -4861,6 +5977,24 @@ function handleStepperButtons() {
       persistState();
     });
   }
+  addListenerIfPresent(dom.challengeAlphaBtn, 'click', () => {
+    applyDraftChallengePlacementMode('alpha');
+    renderChallengeSetupSection();
+    renderNewTournamentSummary();
+    persistState();
+  });
+  addListenerIfPresent(dom.challengeRandomBtn, 'click', () => {
+    applyDraftChallengePlacementMode('random');
+    renderChallengeSetupSection();
+    renderNewTournamentSummary();
+    persistState();
+  });
+  addListenerIfPresent(dom.challengeManualBtn, 'click', () => {
+    applyDraftChallengePlacementMode('manual');
+    renderChallengeSetupSection();
+    renderNewTournamentSummary();
+    persistState();
+  });
 }
 
 /* === Initialisation === */
@@ -4875,6 +6009,20 @@ function cacheDom() {
   dom.closeHelpBtn = document.getElementById('closeHelpBtn');
   dom.helpLaunchBtn = document.getElementById('helpLaunchBtn');
   dom.newTournamentForm = document.getElementById('newTournamentForm');
+  dom.newStepTitle = document.getElementById('newStepTitle');
+  dom.newStepDescription = document.getElementById('newStepDescription');
+  dom.newStepProgress = document.getElementById('newStepProgress');
+  dom.newStepNavHint = document.getElementById('newStepNavHint');
+  dom.newStepPrevBtn = document.getElementById('newStepPrevBtn');
+  dom.newStepNextBtn = document.getElementById('newStepNextBtn');
+  dom.newWizardNav = document.querySelector('.new-wizard-nav');
+  dom.newWizardSteps = document.getElementById('newWizardSteps');
+  dom.newWizardSummary = document.getElementById('newWizardSummary');
+  dom.newWizardInlineSummary = document.getElementById('newWizardInlineSummary');
+  dom.analysisPanel = document.getElementById('analysisPanel');
+  dom.analysisModifyBtn = document.getElementById('analysisModifyBtn');
+  dom.skipNamesStepBtn = document.getElementById('skipNamesStepBtn');
+  dom.validationAnalysis = document.getElementById('validationAnalysis');
   dom.formatCards = document.getElementById('formatCards');
   dom.participantCountInput = document.getElementById('participantCountInput');
   dom.participantCountLabel = document.getElementById('participantCountLabel');
@@ -4885,6 +6033,14 @@ function cacheDom() {
   dom.teamNamesGrid = document.getElementById('teamNamesGrid');
   dom.studentNamesSection = document.getElementById('studentNamesSection');
   dom.studentNamesInput = document.getElementById('studentNamesInput');
+  dom.ladderSetupSection = document.getElementById('ladderSetupSection');
+  dom.ladderArbitratedFields = document.getElementById('ladderArbitratedFields');
+  dom.ladderPlacementStatus = document.getElementById('ladderPlacementStatus');
+  dom.ladderPlacementGrid = document.getElementById('ladderPlacementGrid');
+  dom.ladderUnplacedList = document.getElementById('ladderUnplacedList');
+  dom.ladderAlphaBtn = document.getElementById('ladderAlphaBtn');
+  dom.ladderRandomBtn = document.getElementById('ladderRandomBtn');
+  dom.ladderManualBtn = document.getElementById('ladderManualBtn');
   dom.fieldCountInput = document.getElementById('fieldCountInput');
   dom.fieldCountLabel = document.getElementById('fieldCountLabel');
   dom.fieldMinusBtn = document.getElementById('fieldMinusBtn');
@@ -4936,6 +6092,13 @@ function cacheDom() {
   dom.challengeRangeLabel = document.getElementById('challengeRangeLabel');
   dom.challengeRangeMinusBtn = document.getElementById('challengeRangeMinusBtn');
   dom.challengeRangePlusBtn = document.getElementById('challengeRangePlusBtn');
+  dom.challengeSetupSection = document.getElementById('challengeSetupSection');
+  dom.challengePlacementStatus = document.getElementById('challengePlacementStatus');
+  dom.challengePlacementGrid = document.getElementById('challengePlacementGrid');
+  dom.challengeUnplacedList = document.getElementById('challengeUnplacedList');
+  dom.challengeAlphaBtn = document.getElementById('challengeAlphaBtn');
+  dom.challengeRandomBtn = document.getElementById('challengeRandomBtn');
+  dom.challengeManualBtn = document.getElementById('challengeManualBtn');
   dom.poolSizeBlock = document.getElementById('poolSizeBlock');
   dom.poolSizeInput = document.getElementById('poolSizeInput');
   dom.poolSizeLabel = document.getElementById('poolSizeLabel');
@@ -4948,6 +6111,7 @@ function cacheDom() {
 function bindEvents() {
   document.addEventListener('click', handleGlobalClick);
   document.addEventListener('input', handleGlobalInput);
+  document.addEventListener('change', handleGlobalChange);
   document.addEventListener('submit', handleGlobalSubmit);
   const liveHeaderInfo = document.getElementById('liveHeaderInfo');
   const liveHeader = document.getElementById('liveHeader');
@@ -4986,6 +6150,7 @@ function bindEvents() {
 function init() {
   cacheDom();
   bindEvents();
+  renderHelpTabs(runtime.helpTab);
   renderHomeView();
   renderNewTournamentView();
   renderSessionsView();

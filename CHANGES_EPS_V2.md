@@ -10,6 +10,8 @@
 ### Pré-lancement
 - Ajout d’une vraie `Simulation / Analyse rapide de séance` avant lancement.
 - La simulation lit les paramètres actuels, affiche un diagnostic de fluidité et d’organisation, mais ne crée pas de tournoi et ne modifie pas l’état principal.
+- Accueil revu pour une présentation plus professionnelle, centrée et plus confortable sur Mac, tablette et mobile.
+- Aide intégrée mise à jour avec `Ladder`, `terrains arbitres fixes`, `placement initial Ladder`, `Défi`, `classement initial Défi`, `vue compacte Défi` et saisie `Victoire de...`.
 
 ### Fiabilité terrain
 - Fallback `structuredClone` pour compatibilité avec Safari/iPad plus anciens.

@@ -14,6 +14,8 @@ python3 -m http.server 4173
 - Sports collectifs : `Championnat`, `Coupe du monde`, `Poules tournantes`.
 - Raquettes : `Tournoi poule`, `Poules`, `Échelle / Ladder`, `Ronde suisse`, `Défi`.
 - Paramétrage simple : participants, terrains, créneau, durée, arbitre tournant, table de marque, nom de séance.
+- Ladder raquettes avancé : choix de terrains arbitres fixes, placement initial manuel ou automatique, et logique montée-descente où l’arbitrage reste attaché au terrain.
+- Défi raquettes avancé : classement initial alphabétique, aléatoire ou manuel, vue live compacte et saisie par victoire.
 - Simulation / analyse rapide de séance avant lancement, pour estimer la fluidité et l’organisation.
 - Vue live terrain : chrono, saisie de scores, validation explicite `0-0`, rotation précédente/suivante, bandeau d’état de rotation.
 - Classement et statistiques : calculés uniquement à partir des scores validés.
@@ -21,6 +23,7 @@ python3 -m http.server 4173
 - Suivi par classe.
 - Impression du résumé final.
 - Export CSV des classements et des matchs réellement saisis.
+- Accueil revu pour un usage plus centré et plus lisible, avec aide intégrée courte et à jour.
 
 ## Fonctionnalités non présentes dans cette version
 - Pas de bouton ou mode `EPS rapide` distinct.
@@ -48,6 +51,7 @@ python3 -m http.server 4173
 - Si aucun élève ou équipe n’est au repos, l’application n’invente pas d’arbitre ou de table.
 - La simulation est une aide à la décision avant lancement : elle n’enregistre rien et ne crée pas de tournoi.
 - Pour un grand écran, utiliser simplement l’affichage du navigateur : cette version n’a pas de mode projection séparé.
+- En `Échelle / Ladder`, un terrain arbitré fixe garde toujours `2 joueurs + 1 arbitre`. L’arbitre joue au tour suivant sur ce même terrain. Un joueur qui monte vers un terrain arbitré commence par arbitrer ; un joueur qui descend vers un terrain arbitré joue. Sur `T1`, le gagnant reste joueur ; sur le dernier terrain arbitré, le perdant devient arbitre.
 
 ## Smoke tests locaux
 Un script léger de QA est fourni :

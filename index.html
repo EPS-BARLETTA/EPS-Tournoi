@@ -18,17 +18,43 @@
   <body>
     <div class="app-shell">
       <section class="view active" id="view-home" data-view="home">
-        <header class="hero-card">
-          <p class="hero-kicker">EPS Tournoi</p>
-          <h1>EPS Tournoi</h1>
-          <p>Sports collectifs · Raquettes</p>
+        <header class="hero-card home-hero home-app home-hero-pro">
+          <div class="home-hero-copy home-title-center">
+            <span class="home-hero-badge">EPS Tournoi</span>
+            <h1>EPS Tournoi</h1>
+            <p>Créer, gérer et suivre vos séances EPS.</p>
+            <div class="home-hero-tags" aria-label="Types de pratique">
+              <span class="home-hero-tag">⚽ Sports collectifs</span>
+              <span class="home-hero-tag">🏸 Raquettes</span>
+            </div>
+            <div class="home-primary-action home-main-action">
+              <button class="btn btn-primary btn-lg" id="startNewTournamentBtn" type="button">▶ Nouveau tournoi</button>
+            </div>
+          </div>
         </header>
-        <div class="home-actions">
-          <button class="btn btn-primary btn-xl" id="startNewTournamentBtn" type="button">▶ Nouveau tournoi</button>
-          <button class="btn btn-secondary btn-lg" id="resumeSessionBtn" type="button">↩ Reprendre une séance</button>
-          <button class="btn btn-secondary btn-lg" id="classroomsBtn" type="button">🏫 Mes classes</button>
-          <button class="btn btn-secondary btn-lg" id="helpBtn" type="button">❓ Mode d’emploi</button>
-          <button class="btn btn-secondary btn-lg hidden" id="lastStatsBtn" type="button">📊 Dernière séance : Stats</button>
+        <div class="home-actions home-secondary-grid home-action-grid-pro">
+          <button class="btn btn-secondary btn-lg home-action-card home-action-button-pro" id="resumeSessionBtn" type="button">
+            <span class="home-action-card-icon">↩</span>
+            <span class="home-action-card-copy">
+              <strong>Reprendre une séance</strong>
+              <span>Ouvrir une séance déjà sauvegardée.</span>
+            </span>
+          </button>
+          <button class="btn btn-secondary btn-lg home-action-card home-action-button-pro" id="classroomsBtn" type="button">
+            <span class="home-action-card-icon">🏫</span>
+            <span class="home-action-card-copy">
+              <strong>Mes classes</strong>
+              <span>Retrouver le suivi des élèves et séances.</span>
+            </span>
+          </button>
+          <button class="btn btn-secondary btn-lg home-action-card home-action-button-pro" id="helpBtn" type="button">
+            <span class="home-action-card-icon">❓</span>
+            <span class="home-action-card-copy">
+              <strong>Mode d’emploi</strong>
+              <span>Consulter les repères terrain essentiels.</span>
+            </span>
+          </button>
+          <button class="btn btn-secondary btn-lg home-action-card home-action-button-pro home-action-card-soft home-last-session-card hidden" id="lastStatsBtn" type="button">📊 Dernière séance : Stats</button>
         </div>
       </section>
 
@@ -36,150 +62,251 @@
         <header class="view-header">
           <div>
             <p class="section-kicker">Nouvelle séance</p>
-            <h2>Nouveau tournoi</h2>
-            <p>Préparez la séance et lancez le tournoi.</p>
+            <h2>Préparez votre séance</h2>
+            <p>Avancez étape par étape, gardez le résumé visible puis lancez le tournoi quand tout est prêt.</p>
           </div>
           <button class="btn btn-secondary btn-sm" type="button" data-view-target="home">Accueil</button>
         </header>
 
-        <form class="panel-stack" id="newTournamentForm">
-          <section class="panel-card">
-            <div class="panel-head">
-              <h3>Type de sport</h3>
+        <form class="panel-stack new-wizard-form" id="newTournamentForm">
+          <section class="panel-card new-wizard-overview">
+            <div class="new-wizard-overview-head">
+              <div>
+                <p class="new-wizard-kicker" id="newStepProgress">Étape 1 sur 5</p>
+                <h3 id="newStepTitle">Activité</h3>
+                <p id="newStepDescription">Choisissez le sport et le format.</p>
+              </div>
             </div>
-            <div class="choice-row two-cols" id="sportChoiceRow">
-              <button class="choice-card selected" type="button" data-sport="sport-co">⚽ Sports collectifs</button>
-              <button class="choice-card" type="button" data-sport="raquette">🏸 Raquettes</button>
+            <div class="new-wizard-steps" id="newWizardSteps" aria-label="Progression de préparation">
+              <span class="new-wizard-step-pill">Activité</span>
+              <span class="new-wizard-step-pill">Paramètres</span>
+              <span class="new-wizard-step-pill">Analyse EPS</span>
+              <span class="new-wizard-step-pill">Noms</span>
+              <span class="new-wizard-step-pill">Vérification</span>
             </div>
+            <p class="new-wizard-inline-summary hidden" id="newWizardInlineSummary"></p>
           </section>
 
-          <section class="panel-card">
-            <div class="panel-head">
-              <h3>Format de tournoi</h3>
-            </div>
-            <div class="format-grid" id="formatCards"></div>
+          <section class="new-wizard-step" data-step="1">
+            <section class="panel-card">
+              <div class="panel-head">
+                <h3>Type de sport</h3>
+              </div>
+              <div class="choice-row two-cols" id="sportChoiceRow">
+                <button class="choice-card selected" type="button" data-sport="sport-co">⚽ Sports collectifs</button>
+                <button class="choice-card" type="button" data-sport="raquette">🏸 Raquettes</button>
+              </div>
+            </section>
+
+            <section class="panel-card">
+              <div class="panel-head">
+                <h3>Format de tournoi</h3>
+              </div>
+              <div class="format-grid" id="formatCards"></div>
+            </section>
           </section>
 
-          <section class="panel-card">
-            <div class="panel-head">
-              <h3>Participants</h3>
-            </div>
-            <div class="stepper-row">
-              <button class="stepper-btn" id="participantMinusBtn" type="button" aria-label="Retirer des élèves">−</button>
-              <label class="stepper-display">
-                <input id="participantCountInput" type="number" min="4" max="48" value="24" />
-                <span id="participantCountLabel">24</span>
-              </label>
-              <button class="stepper-btn" id="participantPlusBtn" type="button" aria-label="Ajouter des élèves">+</button>
-            </div>
-            <div class="suggestion-list" id="configSuggestions"></div>
+          <section class="new-wizard-step" data-step="2">
+            <section class="panel-card">
+              <div class="panel-head">
+                <h3>Paramètres de séance</h3>
+                <p>Renseignez l’effectif, les terrains et le créneau.</p>
+              </div>
 
-            <div class="panel-subsection hidden" id="teamNamesSection">
+              <div class="inline-block">
+                <span class="field-label">Participants</span>
+                <div class="stepper-row">
+                  <button class="stepper-btn" id="participantMinusBtn" type="button" aria-label="Retirer des élèves">−</button>
+                  <label class="stepper-display">
+                    <input id="participantCountInput" type="number" min="4" max="48" value="24" />
+                    <span id="participantCountLabel">24</span>
+                  </label>
+                  <button class="stepper-btn" id="participantPlusBtn" type="button" aria-label="Ajouter des élèves">+</button>
+                </div>
+              </div>
+
+              <div class="inline-block">
+                <span class="field-label">Terrains</span>
+                <div class="stepper-row compact">
+                  <button class="stepper-btn" id="fieldMinusBtn" type="button" aria-label="Retirer un terrain">−</button>
+                  <label class="stepper-display">
+                    <input id="fieldCountInput" type="number" min="1" max="20" value="2" />
+                    <span id="fieldCountLabel">2</span>
+                  </label>
+                  <button class="stepper-btn" id="fieldPlusBtn" type="button" aria-label="Ajouter un terrain">+</button>
+                </div>
+              </div>
+
+              <div class="time-grid">
+                <label class="field">
+                  <span>Début</span>
+                  <input id="startTimeInput" type="time" value="10:00" />
+                </label>
+                <label class="field">
+                  <span>Fin</span>
+                  <input id="endTimeInput" type="time" value="11:00" />
+                </label>
+              </div>
+
+              <div class="timing-summary" id="timingSummary"></div>
+
+              <div class="inline-block">
+                <span class="field-label">Durée d'un match</span>
+                <div class="stepper-row compact">
+                  <button class="stepper-btn" id="durationMinusBtn" type="button" aria-label="Réduire la durée">−</button>
+                  <label class="stepper-display">
+                    <input id="matchDurationInput" type="number" min="1" max="60" value="7" />
+                    <span id="matchDurationLabel">7 min</span>
+                  </label>
+                  <button class="stepper-btn" id="durationPlusBtn" type="button" aria-label="Augmenter la durée">+</button>
+                </div>
+              </div>
+            </section>
+          </section>
+
+          <section class="new-wizard-step" data-step="3">
+            <section class="panel-card">
+              <div class="panel-head">
+                <h3>📊 Analyse EPS</h3>
+                <p>Analyse de la configuration actuelle et des options possibles.</p>
+              </div>
+              <div id="analysisPanel"></div>
+              <div class="footer-actions new-analysis-actions">
+                <button class="btn btn-secondary btn-lg" id="analysisModifyBtn" type="button">Modifier les paramètres</button>
+              </div>
+            </section>
+          </section>
+
+          <section class="new-wizard-step" data-step="4">
+            <section class="panel-card">
+              <div class="panel-head">
+                <h3>Noms</h3>
+                <p>Ajoutez des noms d’élèves ou d’équipes si vous le souhaitez.</p>
+              </div>
+              <div class="suggestion-list hidden" id="configSuggestions"></div>
+
+              <div class="panel-subsection hidden" id="teamNamesSection">
+                <div class="panel-head compact">
+                  <h4>Noms / couleurs des équipes</h4>
+                  <p>Laissez vide pour garder les noms proposés.</p>
+                </div>
+                <div class="name-grid" id="teamNamesGrid"></div>
+              </div>
+
+              <div class="panel-subsection hidden" id="studentNamesSection">
+                <div class="panel-head compact">
+                  <h4>Noms des élèves</h4>
+                  <p>Un nom par ligne. Optionnel.</p>
+                </div>
+                <label class="field">
+                  <textarea id="studentNamesInput" rows="7" placeholder="Nom Prénom&#10;Nom Prénom&#10;Nom Prénom"></textarea>
+                </label>
+              </div>
+
+              <div class="panel-subsection hidden" id="ladderSetupSection">
+                <div class="panel-head compact">
+                  <h4>Placement initial Ladder</h4>
+                  <p>Choisissez les terrains arbitres fixes puis placez les élèves avant lancement.</p>
+                </div>
+                <div class="ladder-setup-toolbar">
+                  <div>
+                    <span class="field-label">Terrains à 3 élèves avec arbitre</span>
+                    <div class="ladder-field-toggle-grid" id="ladderArbitratedFields"></div>
+                  </div>
+                  <div class="ladder-setup-actions">
+                    <button class="btn btn-sm ladder-placement-btn-alpha" id="ladderAlphaBtn" type="button">🔤 Placement alphabétique</button>
+                    <button class="btn btn-sm ladder-placement-btn-random" id="ladderRandomBtn" type="button">🎲 Placement aléatoire</button>
+                    <button class="btn btn-sm ladder-placement-btn-manual" id="ladderManualBtn" type="button">✍️ Placement manuel</button>
+                  </div>
+                </div>
+                <p class="ladder-placement-help">Choisissez un mode de placement des élèves avant le lancement de l’échelle.</p>
+                <div id="ladderPlacementStatus"></div>
+                <div class="ladder-placement-grid" id="ladderPlacementGrid"></div>
+                <div id="ladderUnplacedList"></div>
+              </div>
+
+              <div class="panel-subsection hidden challenge-placement-section" id="challengeSetupSection">
+                <div class="panel-head compact">
+                  <h4>Classement initial Défi</h4>
+                  <p>Choisissez le classement de départ des élèves avant le lancement du défi.</p>
+                </div>
+                <div class="challenge-placement-actions">
+                  <button class="btn btn-sm challenge-placement-btn-alpha" id="challengeAlphaBtn" type="button">🔤 Placement alphabétique</button>
+                  <button class="btn btn-sm challenge-placement-btn-random" id="challengeRandomBtn" type="button">🎲 Placement aléatoire</button>
+                  <button class="btn btn-sm challenge-placement-btn-manual" id="challengeManualBtn" type="button">✍️ Placement manuel</button>
+                </div>
+                <p class="ladder-placement-help">Choisissez le classement de départ des élèves avant le lancement du défi.</p>
+                <div id="challengePlacementStatus"></div>
+                <div class="challenge-initial-ranking-grid" id="challengePlacementGrid"></div>
+                <div id="challengeUnplacedList"></div>
+              </div>
+              <div class="footer-actions new-names-actions">
+                <button class="btn btn-secondary btn-lg" id="skipNamesStepBtn" type="button">Passer cette étape</button>
+              </div>
+            </section>
+          </section>
+
+          <section class="new-wizard-step" data-step="5">
+            <section class="panel-card new-wizard-current-summary">
               <div class="panel-head compact">
-                <h4>Noms des équipes</h4>
-                <p>Laissez vide pour garder les noms proposés.</p>
+                <h4>Résumé final</h4>
+                <p>Vérifiez les éléments essentiels avant de lancer la séance.</p>
               </div>
-              <div class="name-grid" id="teamNamesGrid"></div>
-            </div>
+              <div class="new-wizard-summary" id="newWizardSummary"></div>
+              <div class="new-validation-analysis" id="validationAnalysis"></div>
+            </section>
 
-            <div class="panel-subsection hidden" id="studentNamesSection">
-              <div class="panel-head compact">
-                <h4>Noms des élèves</h4>
-                <p>Un nom par ligne. Optionnel.</p>
+            <details class="panel-card options-panel" open>
+              <summary>▼ Options et réglages</summary>
+              <div class="options-grid">
+                <label class="toggle-row">
+                  <input id="rotatingRefereeInput" type="checkbox" />
+                  <span>Arbitre tournant</span>
+                </label>
+                <label class="toggle-row">
+                  <input id="scoreTableInput" type="checkbox" />
+                  <span>Table de marque</span>
+                </label>
+                <label class="field">
+                  <span>Nom de la séance</span>
+                  <input id="sessionNameInput" type="text" placeholder="Classe 5e A - Badminton" />
+                </label>
               </div>
-              <label class="field">
-                <textarea id="studentNamesInput" rows="7" placeholder="Nom Prénom&#10;Nom Prénom&#10;Nom Prénom"></textarea>
-              </label>
-            </div>
+              <div class="inline-block" id="challengeRangeBlock" style="display:none;">
+                <span class="field-label">Plage de défi (±N rangs)</span>
+                <div class="stepper-row compact">
+                  <button class="stepper-btn" id="challengeRangeMinusBtn" type="button" aria-label="Réduire la plage">−</button>
+                  <label class="stepper-display">
+                    <input id="challengeRangeInput" type="number" min="1" max="10" value="5" />
+                    <span id="challengeRangeLabel">±5</span>
+                  </label>
+                  <button class="stepper-btn" id="challengeRangePlusBtn" type="button" aria-label="Augmenter la plage">+</button>
+                </div>
+                <p style="color:var(--text-soft);font-size:0.88rem;margin-top:8px;">Un joueur peut défier quelqu'un dans cette fourchette au-dessus de lui dans le classement.</p>
+              </div>
+              <div class="inline-block" id="poolSizeBlock" style="display:none;">
+                <span class="field-label">Taille des poules</span>
+                <div class="stepper-row compact">
+                  <button class="stepper-btn" id="poolSizeMinusBtn" type="button" aria-label="Réduire la taille de poule">−</button>
+                  <label class="stepper-display">
+                    <input id="poolSizeInput" type="number" min="3" max="6" value="4" />
+                    <span id="poolSizeLabel">4</span>
+                  </label>
+                  <button class="stepper-btn" id="poolSizePlusBtn" type="button" aria-label="Augmenter la taille de poule">+</button>
+                </div>
+              </div>
+            </details>
+
+            <button class="btn btn-secondary btn-launch btn-simulate" id="simulateSessionBtn" type="button">📊 Simuler la séance</button>
+            <div class="simulation-panel hidden" id="simulationPanel"></div>
+            <button class="btn btn-primary btn-launch" id="launchTournamentBtn" type="submit">▶ Lancer le tournoi</button>
           </section>
 
-          <section class="panel-card">
-            <div class="panel-head">
-              <h3>Terrains et temps</h3>
-            </div>
-
-            <div class="inline-block">
-              <span class="field-label">Terrains</span>
-              <div class="stepper-row compact">
-                <button class="stepper-btn" id="fieldMinusBtn" type="button" aria-label="Retirer un terrain">−</button>
-                <label class="stepper-display">
-                  <input id="fieldCountInput" type="number" min="1" max="20" value="2" />
-                  <span id="fieldCountLabel">2</span>
-                </label>
-                <button class="stepper-btn" id="fieldPlusBtn" type="button" aria-label="Ajouter un terrain">+</button>
-              </div>
-            </div>
-
-            <div class="time-grid">
-              <label class="field">
-                <span>Début</span>
-                <input id="startTimeInput" type="time" value="10:00" />
-              </label>
-              <label class="field">
-                <span>Fin</span>
-                <input id="endTimeInput" type="time" value="11:00" />
-              </label>
-            </div>
-
-            <div class="timing-summary" id="timingSummary"></div>
-
-            <div class="inline-block">
-              <span class="field-label">Durée d'un match</span>
-              <div class="stepper-row compact">
-                <button class="stepper-btn" id="durationMinusBtn" type="button" aria-label="Réduire la durée">−</button>
-                <label class="stepper-display">
-                  <input id="matchDurationInput" type="number" min="1" max="60" value="7" />
-                  <span id="matchDurationLabel">7 min</span>
-                </label>
-                <button class="stepper-btn" id="durationPlusBtn" type="button" aria-label="Augmenter la durée">+</button>
-              </div>
-            </div>
+          <section class="panel-card new-wizard-nav">
+            <button class="btn btn-secondary btn-lg" id="newStepPrevBtn" type="button">← Étape précédente</button>
+            <p class="new-wizard-nav-hint" id="newStepNavHint">Passez à l’étape suivante quand ce bloc est prêt.</p>
+            <button class="btn btn-primary btn-lg" id="newStepNextBtn" type="button">Étape suivante →</button>
           </section>
-
-          <details class="panel-card options-panel">
-            <summary>▼ Options</summary>
-            <div class="options-grid">
-              <label class="toggle-row">
-                <input id="rotatingRefereeInput" type="checkbox" />
-                <span>Arbitre tournant</span>
-              </label>
-              <label class="toggle-row">
-                <input id="scoreTableInput" type="checkbox" />
-                <span>Table de marque</span>
-              </label>
-              <label class="field">
-                <span>Nom de la séance</span>
-                <input id="sessionNameInput" type="text" placeholder="Classe 5e A - Badminton" />
-              </label>
-            </div>
-            <div class="inline-block" id="challengeRangeBlock" style="display:none;">
-              <span class="field-label">Plage de défi (±N rangs)</span>
-              <div class="stepper-row compact">
-                <button class="stepper-btn" id="challengeRangeMinusBtn" type="button" aria-label="Réduire la plage">−</button>
-                <label class="stepper-display">
-                  <input id="challengeRangeInput" type="number" min="1" max="10" value="5" />
-                  <span id="challengeRangeLabel">±5</span>
-                </label>
-                <button class="stepper-btn" id="challengeRangePlusBtn" type="button" aria-label="Augmenter la plage">+</button>
-              </div>
-              <p style="color:var(--text-soft);font-size:0.88rem;margin-top:8px;">Un joueur peut défier quelqu'un dans cette fourchette au-dessus de lui dans le classement.</p>
-            </div>
-            <div class="inline-block" id="poolSizeBlock" style="display:none;">
-              <span class="field-label">Taille des poules</span>
-              <div class="stepper-row compact">
-                <button class="stepper-btn" id="poolSizeMinusBtn" type="button" aria-label="Réduire la taille de poule">−</button>
-                <label class="stepper-display">
-                  <input id="poolSizeInput" type="number" min="3" max="6" value="4" />
-                  <span id="poolSizeLabel">4</span>
-                </label>
-                <button class="stepper-btn" id="poolSizePlusBtn" type="button" aria-label="Augmenter la taille de poule">+</button>
-              </div>
-            </div>
-          </details>
-
-          <button class="btn btn-secondary btn-launch btn-simulate" id="simulateSessionBtn" type="button">📊 Simuler la séance</button>
-          <div class="simulation-panel hidden" id="simulationPanel"></div>
-          <button class="btn btn-primary btn-launch" id="launchTournamentBtn" type="submit">▶ Lancer le tournoi</button>
         </form>
       </section>
 
@@ -295,83 +422,87 @@
 
     <div class="help-modal hidden" id="helpModal">
       <div class="help-modal-panel">
-        <div class="help-hero">
-          <div class="help-hero-copy">
-            <p class="help-hero-kicker">EPS Tournoi</p>
-            <h3>Bienvenue dans EPS Tournoi</h3>
-            <p>Organisez votre séance en quelques minutes 🏆</p>
-          </div>
-          <div class="help-hero-art" aria-hidden="true">
-            <span class="help-float-badge badge-one">⚽ Match</span>
-            <span class="help-float-badge badge-two">🏸 Rotation</span>
-            <span class="help-float-badge badge-three">⏱️ Chrono</span>
-            <span class="help-float-badge badge-four">📊 Classement</span>
+        <div class="help-modal-header">
+          <div>
+            <p class="help-modal-kicker">Mode d’emploi</p>
+            <h3>Mode d’emploi</h3>
+            <p>Les repères essentiels pour gérer une séance.</p>
           </div>
         </div>
 
-        <section class="help-quickstart">
-          <div class="panel-head compact">
-            <h4>Démarrage ultra rapide</h4>
-            <p>Le chemin le plus court pour lancer une séance au bord du terrain.</p>
-          </div>
-          <div class="help-steps">
-            <div class="help-step"><span>1️⃣</span><strong>Choisis ton sport</strong></div>
-            <div class="help-step"><span>2️⃣</span><strong>Indique les élèves</strong></div>
-            <div class="help-step"><span>3️⃣</span><strong>Lance le tournoi</strong></div>
-            <div class="help-step"><span>4️⃣</span><strong>Saisis les scores</strong></div>
-            <div class="help-step"><span>5️⃣</span><strong>Passe à la rotation suivante</strong></div>
-          </div>
-        </section>
-
-        <div class="help-tip-strip">
-          <span class="help-tip-pill tip-green">💡 Astuce EPS</span>
-          <span class="help-tip-pill tip-orange">🔥 Gain de temps</span>
-          <span class="help-tip-pill tip-blue">📱 Idéal sur tablette</span>
-          <span class="help-tip-pill tip-cyan">🏫 Compatible grand écran</span>
+        <div class="help-tab-row" role="tablist" aria-label="Catégories d’aide">
+          <button class="help-tab-btn is-active" type="button" role="tab" aria-selected="true" data-help-tab="start">Démarrer</button>
+          <button class="help-tab-btn" type="button" role="tab" aria-selected="false" data-help-tab="scores">Scores</button>
+          <button class="help-tab-btn" type="button" role="tab" aria-selected="false" data-help-tab="ladder">Ladder</button>
+          <button class="help-tab-btn" type="button" role="tab" aria-selected="false" data-help-tab="challenge">Défi</button>
+          <button class="help-tab-btn" type="button" role="tab" aria-selected="false" data-help-tab="sports-co">Sports co</button>
+          <button class="help-tab-btn" type="button" role="tab" aria-selected="false" data-help-tab="export">Export</button>
         </div>
 
-        <div class="help-faq">
-          <details class="help-card" open>
-            <summary><span class="help-card-icon">⚽</span><span>Comment lancer un tournoi rapidement ?</span></summary>
-            <div class="help-card-body"><div><p>Appuyez sur Nouveau tournoi, choisissez le sport, le format, les participants et les terrains, puis lancez. L’app est pensée pour aller vite, même quand la classe attend déjà.</p></div></div>
-          </details>
-          <details class="help-card">
-            <summary><span class="help-card-icon">⚽</span><span>Quelle différence entre Sports collectifs et Raquettes ?</span></summary>
-            <div class="help-card-body"><div><p>En sport collectif, on suit des équipes et leurs résultats. En raquettes, on suit des joueurs individuellement avec leur classement personnel et leur ratio de victoires.</p></div></div>
-          </details>
-          <div class="help-inline-note note-orange">💡 Astuce EPS : si vous voulez aller vite, commencez par le format le plus simple et laissez les options avancées fermées.</div>
-          <details class="help-card">
-            <summary><span class="help-card-icon">📊</span><span>Comment saisir les scores ?</span></summary>
-            <div class="help-card-body"><div><p>Utilisez les boutons + et − sur chaque terrain. Tant qu’un score n’est pas validé, il ne compte pas dans le classement de la rotation.</p></div></div>
-          </details>
-          <details class="help-card">
-            <summary><span class="help-card-icon">🤝</span><span>Comment valider un 0-0 ?</span></summary>
-            <div class="help-card-body"><div><p>Appuyez sur le bouton Valider 0-0 pour enregistrer explicitement un match nul sans point marqué. Cela permet de distinguer un vrai 0-0 d’un match non saisi.</p></div></div>
-          </details>
-          <details class="help-card">
-            <summary><span class="help-card-icon">🏁</span><span>Comment passer à la rotation suivante ?</span></summary>
-            <div class="help-card-body"><div><p>Quand tous les matchs sont saisis, le bandeau de rotation passe au vert. Vous pouvez alors utiliser Rotation suivante + reset chrono pour enchaîner proprement.</p></div></div>
-          </details>
-          <div class="help-inline-note note-blue">📱 Idéal sur tablette : gardez l’écran live ouvert et confiez la saisie des scores à un élève responsable ou à un arbitre.</div>
-          <details class="help-card">
-            <summary><span class="help-card-icon">⏱️</span><span>Comment utiliser le chrono ?</span></summary>
-            <div class="help-card-body"><div><p>Le chrono peut être démarré, mis en pause et réinitialisé à tout moment. Au passage à la rotation suivante, il revient prêt à démarrer pour le nouveau créneau.</p></div></div>
-          </details>
-          <details class="help-card">
-            <summary><span class="help-card-icon">🪜</span><span>Comment fonctionne la montée-descente ?</span></summary>
-            <div class="help-card-body"><div><p>Les gagnants montent, les perdants descendent. Une fois les scores validés, l’ordre des terrains est recalculé pour créer la rotation suivante.</p></div></div>
-          </details>
-          <details class="help-card">
-            <summary><span class="help-card-icon">📺</span><span>Comment imprimer ou afficher sur grand écran ?</span></summary>
-            <div class="help-card-body"><div><p>Cette version ne propose pas de vue projection dédiée. Pour un grand écran, affichez simplement l’app dans le navigateur. En fin de séance, utilisez ensuite l’impression ou l’export CSV pour partager les résultats.</p></div></div>
-          </details>
-          <details class="help-card">
-            <summary><span class="help-card-icon">🧑‍⚖️</span><span>Que faire si un élève est absent ou indisponible ?</span></summary>
-            <div class="help-card-body"><div><p>Ajustez le nombre de participants avant de lancer. L’application gère ensuite les repos, exemptions et rôles pour garder la séance fluide.</p></div></div>
-          </details>
-        </div>
+        <div class="help-tab-panels" id="helpTabPanels">
+          <section class="help-tab-panel is-active" role="tabpanel" data-help-panel="start">
+            <h4>Démarrer</h4>
+            <ul class="help-points">
+              <li>Choisissez l’activité.</li>
+              <li>Choisissez le format.</li>
+              <li>Ajoutez les élèves ou équipes.</li>
+              <li>Simulez la séance si besoin.</li>
+              <li>Lancez quand le résumé est prêt.</li>
+            </ul>
+          </section>
 
-        <p class="help-footer-note">Conçu pour fonctionner vite, même au bord du terrain.</p>
+          <section class="help-tab-panel" role="tabpanel" data-help-panel="scores" hidden>
+            <h4>Scores</h4>
+            <ul class="help-points">
+              <li>Un score compte seulement après validation.</li>
+              <li><code>0-0</code> doit être validé explicitement.</li>
+              <li>Un match non saisi ne modifie pas le classement.</li>
+              <li>Les exports ne gardent que les matchs validés.</li>
+            </ul>
+          </section>
+
+          <section class="help-tab-panel" role="tabpanel" data-help-panel="ladder" hidden>
+            <h4>Ladder</h4>
+            <ul class="help-points">
+              <li>Le classement suit la montée / descente.</li>
+              <li>Le gagnant monte, le perdant descend.</li>
+              <li>Les terrains arbitres fixes gardent <code>2 joueurs + 1 arbitre</code>.</li>
+              <li>Le placement initial peut être alphabétique, aléatoire ou manuel.</li>
+              <li>En manuel, un élève déjà placé disparaît des autres menus.</li>
+            </ul>
+          </section>
+
+          <section class="help-tab-panel" role="tabpanel" data-help-panel="challenge" hidden>
+            <h4>Défi</h4>
+            <ul class="help-points">
+              <li>Le classement initial peut être alphabétique, aléatoire ou manuel.</li>
+              <li>Un joueur peut défier dans la plage <code>±N</code>.</li>
+              <li>La saisie se fait par <code>Victoire de...</code>, sans score chiffré.</li>
+              <li>Si le moins bien classé bat le mieux classé, il prend sa place.</li>
+              <li>La vue compacte permet de voir un maximum d’élèves.</li>
+            </ul>
+          </section>
+
+          <section class="help-tab-panel" role="tabpanel" data-help-panel="sports-co" hidden>
+            <h4>Sports co</h4>
+            <ul class="help-points">
+              <li>Suivi par équipes.</li>
+              <li>Choisir championnat, coupe ou poules tournantes.</li>
+              <li>Si aucune équipe n’est au repos, prévoir arbitrage croisé.</li>
+              <li>Les couleurs/dossards peuvent servir de noms d’équipes.</li>
+            </ul>
+          </section>
+
+          <section class="help-tab-panel" role="tabpanel" data-help-panel="export" hidden>
+            <h4>Export</h4>
+            <ul class="help-points">
+              <li>En fin de séance, imprimez le classement.</li>
+              <li>Export CSV disponible.</li>
+              <li>Les matchs non validés ne sont pas exportés.</li>
+              <li>Les sauvegardes restent locales dans le navigateur.</li>
+            </ul>
+          </section>
+        </div>
 
         <div class="classroom-actions help-final-actions">
           <button class="btn btn-secondary btn-lg" id="closeHelpBtn" type="button">Fermer</button>
