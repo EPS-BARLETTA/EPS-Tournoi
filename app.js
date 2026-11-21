@@ -45,6 +45,8 @@ function createDefaultDraft() {
     selectedConfigKey: '',
     teamNames: [],
     studentNamesText: '',
+    teamCompositionMode: 'manual',
+    teamAssignments: {},
     fields: 2,
     startTime: '10:00',
     endTime: '11:00',
@@ -2665,6 +2667,8 @@ function sanitizeState(raw) {
   next.draft.endTime = next.draft.endTime || '11:00';
   next.draft.teamNames = Array.isArray(next.draft.teamNames) ? next.draft.teamNames.map(value => String(value || '')) : [];
   next.draft.studentNamesText = String(next.draft.studentNamesText || '');
+  next.draft.teamCompositionMode = next.draft.teamCompositionMode === 'auto' ? 'auto' : 'manual';
+  next.draft.teamAssignments = next.draft.teamAssignments && typeof next.draft.teamAssignments === 'object' && !Array.isArray(next.draft.teamAssignments) ? next.draft.teamAssignments : {};
   next.draft.sessionName = String(next.draft.sessionName || '');
   next.currentSession = source.currentSession && typeof source.currentSession === 'object' ? source.currentSession : null;
   next.lastStatsSessionId = source.lastStatsSessionId || null;
@@ -3486,11 +3490,101 @@ function renderTeamNameFields() {
     .join('');
 }
 
+/* Composition des équipes : affectation persistante par index d'élève. */
+function getCompositionRoster() {
+  const typed = parseNames(state.draft.studentNamesText);
+  return typed.length ? typed : [];
+}
+function ensureTeamCompositionPanel() {
+  let panel = document.getElementById('teamCompositionPanel');
+  if (panel) return panel;
+  panel = document.createElement('div');
+  panel.id = 'teamCompositionPanel';
+  panel.className = 'panel-subsection';
+  panel.style.cssText = 'margin-top:20px;padding:18px;border:1px solid var(--border, #dbe5e3);border-radius:14px;';
+  dom.teamNamesSection.insertAdjacentElement('afterend', panel);
+  return panel;
+}
+function renderTeamComposition() {
+  const panel = ensureTeamCompositionPanel();
+  const config = getSelectedConfigurationForSource(state.draft);
+  const active = Boolean(isTeamBasedDraft() && config);
+  panel.classList.toggle('hidden', !active);
+  if (!active) return;
+  const count = config.teamCount;
+  const names = getDraftTeamNames(config);
+  const roster = getCompositionRoster();
+  const assignments = state.draft.teamAssignments || {};
+  const groups = Array.from({length:count}, () => []);
+  roster.forEach((name,i) => {
+    const team = Number(assignments[i]);
+    if (Number.isInteger(team) && team >= 0 && team < count) groups[team].push(name);
+  });
+  const placed = groups.reduce((n,g)=>n+g.length,0);
+  panel.innerHTML = `
+    <h4 style="margin:0 0 8px">Composition des équipes</h4>
+    <p style="color:var(--text-soft);font-size:.9rem">Saisissez la liste des élèves, puis répartissez-les manuellement ou automatiquement. Les compositions seront enregistrées avec la séance.</p>
+    <label class="field"><span>Liste des élèves (un par ligne)</span>
+      <textarea id="compositionRoster" rows="5" placeholder="Nom Prénom&#10;Nom Prénom&#10;Nom Prénom">${escapeHtml(state.draft.studentNamesText)}</textarea>
+    </label>
+    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0">
+      <button type="button" class="btn btn-secondary btn-sm" data-compose="auto">Répartir automatiquement</button>
+      <button type="button" class="btn btn-secondary btn-sm" data-compose="clear">Répartition manuelle / Tout désaffecter</button>
+    </div>
+    <p style="font-size:.86rem;color:var(--text-soft)">${placed} / ${roster.length} élèves affectés · ${count} équipes · affectation individuelle ci-dessous</p>
+    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:14px 0">
+      ${names.map((name,i)=>`<div style="border:1px solid #d6e3df;border-radius:12px;padding:12px;background:rgba(90,140,120,.05)">
+        <strong>${escapeHtml(name)}</strong> <small>(${groups[i].length})</small>
+        <div style="font-size:.87rem;line-height:1.8;margin-top:7px">${groups[i].length?groups[i].map(escapeHtml).join('<br>'):'<em>Aucun élève</em>'}</div>
+      </div>`).join('')}
+    </div>
+    ${roster.length ? '<h4>Affecter les élèves</h4><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:9px">' +
+      roster.map((name,i)=>`<label class="field"><span>${escapeHtml(name)}</span><select data-composition-index="${i}">
+      <option value="">Non affecté</option>${names.map((team,t)=>`<option value="${t}" ${Number(assignments[i])===t && assignments[i]!==undefined?'selected':''}>${escapeHtml(team)}</option>`).join('')}
+      </select></label>`).join('') + '</div>' : ''}
+  `;
+}
+function autoAssignTeamComposition() {
+  const roster = getCompositionRoster();
+  const config = getSelectedConfigurationForSource(state.draft);
+  if (!config || !roster.length) return;
+  const indices = roster.map((_,i)=>i);
+  for(let i=indices.length-1;i>0;i--){const j=Math.floor(Math.random()*(i+1));[indices[i],indices[j]]=[indices[j],indices[i]];}
+  state.draft.teamAssignments = {};
+  indices.forEach((student,i)=>{state.draft.teamAssignments[student]=i%config.teamCount;});
+  state.draft.teamCompositionMode='auto';
+}
+function getSessionTeamCompositions() {
+  const config = getSelectedConfigurationForSource(state.draft);
+  if (!isTeamBasedDraft() || !config) return null;
+  const roster = getCompositionRoster(), names = getDraftTeamNames(config);
+  return names.map((name,team)=>({
+    name, students:roster.filter((_,i)=>Number(state.draft.teamAssignments?.[i])===team && state.draft.teamAssignments?.[i]!==undefined)
+  }));
+}
+function renderLiveTeamCompositions(session) {
+  let panel = document.getElementById('liveTeamCompositions');
+  if (!panel) {
+    panel = document.createElement('details');
+    panel.id = 'liveTeamCompositions';
+    panel.style.cssText='margin:12px 0;padding:14px;border:1px solid #d6e3df;border-radius:14px;background:var(--surface,white)';
+    const anchor = document.getElementById('liveMatches') || document.querySelector('#view-live .timer-card');
+    if (anchor) anchor.insertAdjacentElement('beforebegin',panel);
+    else document.getElementById('view-live')?.appendChild(panel);
+  }
+  const groups = session?.teamCompositions;
+  panel.classList.toggle('hidden', !Array.isArray(groups) || !groups.length);
+  if (!Array.isArray(groups)||!groups.length)return;
+  panel.innerHTML='<summary style="cursor:pointer;font-weight:700">Voir les compositions des équipes</summary><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-top:12px">'+
+    groups.map(g=>'<div><strong>'+escapeHtml(g.name)+'</strong><div style="font-size:.9rem;line-height:1.7">'+(g.students.length?g.students.map(escapeHtml).join('<br>'):'Aucun élève renseigné')+'</div></div>').join('')+'</div>';
+}
+
 function renderParticipantSection() {
   dom.participantCountInput.value = state.draft.participantCount;
   dom.participantCountLabel.textContent = String(state.draft.participantCount);
   renderConfigSuggestions();
   renderTeamNameFields();
+  renderTeamComposition();
   const showStudentNames = state.draft.sport === 'raquette' || state.draft.format === 'rotating-teams';
   dom.studentNamesSection.classList.toggle('hidden', !showStudentNames || (isTeamBasedDraft() && Boolean(getSelectedConfiguration())));
   dom.studentNamesInput.value = state.draft.studentNamesText;
@@ -4104,6 +4198,7 @@ async function launchTournament() {
       sport: options.sport,
       format: options.format,
       teams: [...teams],
+      teamCompositions: getSessionTeamCompositions(),
       schedule,
       scores: {},
       currentRotation: 0,
@@ -4790,6 +4885,7 @@ function renderLiveView() {
   const session = state.currentSession;
   if (!dom.liveModeLabel || !dom.liveSessionTitle || !dom.liveRotationLabel || !dom.timerStartBtn || !dom.timerPauseBtn || !dom.timerResetBtn || !dom.prevRotationBtn || !dom.nextRotationBtn) return;
   const rotationStatusBanner = document.getElementById('rotationStatusBanner');
+  renderLiveTeamCompositions(session);
   if (!session) {
     showView('home');
     return;
@@ -5609,6 +5705,12 @@ function renderHomeView() {
 /* === Événements === */
 
 function handleGlobalClick(event) {
+  const compositionButton = event.target.closest('[data-compose]');
+  if (compositionButton) {
+    if (compositionButton.dataset.compose === 'auto') autoAssignTeamComposition();
+    else {state.draft.teamAssignments={};state.draft.teamCompositionMode='manual';}
+    renderTeamComposition();persistState();return;
+  }
   const viewTarget = event.target.closest('[data-view-target]');
   if (viewTarget) {
     showView(viewTarget.dataset.viewTarget);
@@ -5827,6 +5929,17 @@ function handleGlobalClick(event) {
 }
 
 function handleGlobalInput(event) {
+  if (event.target.id === 'compositionRoster') {
+    state.draft.studentNamesText=event.target.value;
+    state.draft.teamAssignments={};state.draft.teamCompositionMode='manual';
+    persistState();return;
+  }
+  if (event.target.matches('[data-composition-index]')) {
+    const i=Number(event.target.dataset.compositionIndex),v=event.target.value;
+    if (v==='') delete state.draft.teamAssignments[i];
+    else state.draft.teamAssignments[i]=Number(v);
+    state.draft.teamCompositionMode='manual';renderTeamComposition();persistState();return;
+  }
   if (dom.newTournamentForm?.contains(event.target)) {
     hideSimulationPanel();
   }
@@ -5940,6 +6053,7 @@ function handleGlobalSubmit(event) {
 }
 
 function handleGlobalChange(event) {
+  if (event.target.id === 'compositionRoster') {renderTeamComposition();persistState();return;}
   handleGlobalInput(event);
 }
 
