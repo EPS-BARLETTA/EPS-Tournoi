@@ -1548,50 +1548,87 @@ function splitRotationIntoWaves(rotation, fieldCount, enabledRoles = null) {
   return waves;
 }
 
+// Championnat EPS : remplir les terrains et faire tourner jeu et arbitrage.
 function buildSinglePoolSchedule(teams, options) {
-  const rounds = createRoundRobinPairs(teams, options);
-  const enabledRoles = getEnabledRolesFromOptions(options);
   const fieldCount = clampNumber(Number(options.fields) || 1, 1, 20, 1);
+  const capacity = Math.min(fieldCount, Math.floor(teams.length / 2));
+  const remaining = [];
+  for (let i = 0; i < teams.length; i += 1) {
+    for (let j = i + 1; j < teams.length; j += 1) {
+      remaining.push({ home: teams[i], away: teams[j] });
+    }
+  }
+  const played = new Map(teams.map(name => [name, 0]));
+  const refereed = new Map(teams.map(name => [name, 0]));
+  const lastRole = new Map();
   const rotations = [];
-  let rotationNumber = 1;
-  let totalMatches = 0;
   let clock = parseTime(options.startTime);
-  rounds.forEach((round, index) => {
-    const waves = splitRotationIntoWaves({
-      number: index + 1,
-      title: `Rotation ${index + 1}`,
-      phase: 'single',
-      matches: round.matches.map(match => ({ ...match })),
-      byes: [...round.byes],
-      byeAssignments: assignRolesForByes(round.byes, enabledRoles),
-    }, fieldCount, enabledRoles);
-    waves.forEach(wave => {
-      const startLabel = clock == null ? '' : formatTimeLabel(clock);
-      const endLabel = clock == null ? '' : formatTimeLabel(clock + Number(options.duration || 7));
-      const preparedMatches = (wave.matches || []).map((match, matchIndex) => {
-        totalMatches += 1;
-        return {
-          ...match,
-          field: match.field || matchIndex + 1,
-          phase: match.phase || 'single',
-          groupId: match.groupId || null,
-          groupLabel: match.groupLabel || null,
-        };
-      });
-      rotations.push({
-        ...wave,
-        number: rotationNumber,
-        title: `Rotation ${rotationNumber}`,
-        startLabel,
-        endLabel,
-        matches: preparedMatches,
-      });
-      rotationNumber += 1;
-      if (clock != null) {
-        clock += Number(options.duration || 7);
+  while (remaining.length) {
+    // Essayer plusieurs départs évite de bloquer inutilement un terrain.
+    const ranked = [...remaining].sort((a, b) =>
+      (played.get(a.home) + played.get(a.away)) - (played.get(b.home) + played.get(b.away)));
+    let best = [];
+    let bestCost = Infinity;
+    const attempts = Math.min(ranked.length, 24);
+    for (let seed = 0; seed < attempts; seed += 1) {
+      const chosen = [];
+      const used = new Set();
+      const order = [ranked[seed], ...ranked.filter((_, i) => i !== seed)];
+      for (const match of order) {
+        if (chosen.length >= capacity) break;
+        if (used.has(match.home) || used.has(match.away)) continue;
+        chosen.push(match);
+        used.add(match.home);
+        used.add(match.away);
       }
+      const cost = chosen.reduce((sum, match) =>
+        sum + played.get(match.home) + played.get(match.away) +
+        (lastRole.get(match.home) === 'play' ? 0.2 : 0) +
+        (lastRole.get(match.away) === 'play' ? 0.2 : 0), 0);
+      if (chosen.length > best.length || (chosen.length === best.length && cost < bestCost)) {
+        best = chosen;
+        bestCost = cost;
+      }
+    }
+    const selected = best.length ? best : [remaining[0]];
+    const active = new Set();
+    selected.forEach(match => {
+      const index = remaining.indexOf(match);
+      if (index >= 0) remaining.splice(index, 1);
+      active.add(match.home);
+      active.add(match.away);
+      played.set(match.home, played.get(match.home) + 1);
+      played.set(match.away, played.get(match.away) + 1);
     });
-  });
+    const byes = teams.filter(name => !active.has(name));
+    const refereeNames = [...byes].sort((a, b) =>
+      (refereed.get(a) - refereed.get(b)) ||
+      ((lastRole.get(a) === 'referee' ? 1 : 0) - (lastRole.get(b) === 'referee' ? 1 : 0))
+    ).slice(0, selected.length);
+    refereeNames.forEach(name => refereed.set(name, refereed.get(name) + 1));
+    teams.forEach(name => lastRole.set(name, active.has(name) ? 'play' : refereeNames.includes(name) ? 'referee' : 'rest'));
+    const number = rotations.length + 1;
+    rotations.push({
+      number,
+      title: `Rotation ${number}`,
+      phase: 'single',
+      startLabel: clock == null ? '' : formatTimeLabel(clock),
+      endLabel: clock == null ? '' : formatTimeLabel(clock + Number(options.duration || 7)),
+      matches: selected.map((match, index) => ({
+        ...match,
+        id: buildMatchKey(number, match.home, match.away),
+        field: index + 1,
+        phase: 'single',
+        ...(refereeNames[index] ? { referee: refereeNames[index] } : {}),
+      })),
+      byes,
+      byeAssignments: byes.filter(name => !refereeNames.includes(name)).map(name => ({
+        name,
+        role: 'Spectateur actif',
+      })),
+    });
+    if (clock != null) clock += Number(options.duration || 7);
+  }
   return {
     format: 'round-robin',
     rotations,
@@ -1601,7 +1638,7 @@ function buildSinglePoolSchedule(teams, options) {
       format: 'round-robin',
       formatLabel: TOURNAMENT_MODES['round-robin'].label,
       teamCount: teams.length,
-      matchCount: totalMatches,
+      matchCount: rotations.reduce((sum, rotation) => sum + rotation.matches.length, 0),
       fieldCount,
       rotationCount: rotations.length,
       practiceType: options.practiceType,
