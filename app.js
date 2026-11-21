@@ -45,6 +45,7 @@ function createDefaultDraft() {
     selectedConfigKey: '',
     teamNames: [],
     studentNamesText: '',
+    customTeamCount: 0,
     teamCompositionMode: 'manual',
     teamAssignments: {},
     fields: 2,
@@ -294,12 +295,14 @@ function getSuggestedTeamConfigurations(sourceOrCount) {
   const source = getSuggestionSource(sourceOrCount);
   const safeCount = clampSetupCount(source.participantCount, 24);
   const targetTeams = Math.max(2, clampNumber(Number(source.fields) || 2, 1, 20, 2) * 2);
-  return Array.from({ length: Math.min(10, safeCount - 1) }, (_, index) => index + 2)
+  const customCount = Number(source.customTeamCount) || 0;
+  const counts = Array.from(new Set([...Array.from({ length: Math.min(10, safeCount - 1) }, (_, index) => index + 2), ...(customCount >= 2 && customCount <= safeCount ? [customCount] : [])]));
+  return counts
     .map(teamCount => {
       const baseSize = Math.floor(safeCount / teamCount);
       const extraPlayers = safeCount % teamCount;
       const maxSize = baseSize + (extraPlayers > 0 ? 1 : 0);
-      if (baseSize < 3 || maxSize > 7) return null;
+      if ((baseSize < 3 || maxSize > 7) && teamCount !== customCount) return null;
       const teamSizes = Array.from({ length: teamCount }, (_, index) => (index < extraPlayers ? baseSize + 1 : baseSize));
       let score = 0;
       score += Math.abs(teamCount - targetTeams) * 7;
@@ -323,7 +326,7 @@ function getSuggestedTeamConfigurations(sourceOrCount) {
       if (left.teamCount !== right.teamCount) return Math.abs(left.teamCount - targetTeams) - Math.abs(right.teamCount - targetTeams);
       return right.teamSize - left.teamSize;
     })
-    .slice(0, 4)
+    .filter((entry, index, all) => index < 4 || (customCount >= 2 && entry.teamCount === customCount))
     .map((entry, index) => ({
       ...entry,
       recommended: index === 0,
@@ -368,7 +371,7 @@ function getSelectedConfigurationForSource(source = state.draft) {
   if (!isTeamBasedSource(source)) return null;
   const suggestions = getSuggestedTeamConfigurations(source);
   if (!suggestions.length) return null;
-  return suggestions.find(entry => entry.key === source.selectedConfigKey) || suggestions[0];
+  return (Number(source.customTeamCount) >= 2 ? suggestions.find(entry => entry.teamCount === Number(source.customTeamCount)) : null) || suggestions.find(entry => entry.key === source.selectedConfigKey) || suggestions[0];
 }
 
 function getSelectedConfiguration() {
@@ -2667,6 +2670,7 @@ function sanitizeState(raw) {
   next.draft.endTime = next.draft.endTime || '11:00';
   next.draft.teamNames = Array.isArray(next.draft.teamNames) ? next.draft.teamNames.map(value => String(value || '')) : [];
   next.draft.studentNamesText = String(next.draft.studentNamesText || '');
+  next.draft.customTeamCount = clampNumber(Number(next.draft.customTeamCount) || 0, 0, 16, 0);
   next.draft.teamCompositionMode = next.draft.teamCompositionMode === 'auto' ? 'auto' : 'manual';
   next.draft.teamAssignments = next.draft.teamAssignments && typeof next.draft.teamAssignments === 'object' && !Array.isArray(next.draft.teamAssignments) ? next.draft.teamAssignments : {};
   next.draft.sessionName = String(next.draft.sessionName || '');
@@ -3461,6 +3465,7 @@ function renderConfigSuggestions() {
   const selectedExplanation = selected?.explanation || suggestions[0].explanation;
   dom.configSuggestions.innerHTML = `
     <div class="suggestion-note">Recommandation EPS terrain</div>
+    <label class="field" style="max-width:240px;margin:10px 0"><span>Nombre d'équipes souhaité (optionnel)</span><input id="customTeamCountInput" type="number" min="2" max="16" value="${state.draft.customTeamCount || ''}" placeholder="Ex. 6" /></label>
     <div class="suggestion-chip-row">
       ${suggestions
         .map(entry => `<button class="suggestion-chip ${selected?.key === entry.key ? 'selected' : ''} ${entry.recommended ? 'is-recommended' : ''}" type="button" data-config-key="${entry.key}">${escapeHtml(entry.label)} · ${escapeHtml(entry.summary)}</button>`)
@@ -3491,6 +3496,16 @@ function renderTeamNameFields() {
 }
 
 /* Composition des équipes : affectation persistante par index d'élève. */
+function updateCompositionRoster(nextText) {
+  const previous = getCompositionRoster();
+  const oldAssignments = state.draft.teamAssignments || {};
+  const buckets = new Map();
+  previous.forEach((name,i)=>{const key=name.toLocaleLowerCase('fr');if(!buckets.has(key))buckets.set(key,[]);buckets.get(key).push(oldAssignments[i]);});
+  state.draft.studentNamesText=nextText;
+  const updated={};
+  getCompositionRoster().forEach((name,i)=>{const bucket=buckets.get(name.toLocaleLowerCase('fr'));if(bucket?.length){const team=bucket.shift();if(team!==undefined)updated[i]=team;}});
+  state.draft.teamAssignments=updated;
+}
 function getCompositionRoster() {
   const typed = parseNames(state.draft.studentNamesText);
   return typed.length ? typed : [];
@@ -3521,6 +3536,9 @@ function renderTeamComposition() {
     if (Number.isInteger(team) && team >= 0 && team < count) groups[team].push(name);
   });
   const placed = groups.reduce((n,g)=>n+g.length,0);
+  const missing = roster.length-placed;
+  const mismatch = roster.length && roster.length !== Number(state.draft.participantCount);
+  const duplicates = roster.filter((name,i)=>roster.findIndex(other=>other.toLocaleLowerCase('fr')===name.toLocaleLowerCase('fr'))!==i);
   panel.innerHTML = `
     <h4 style="margin:0 0 8px">Composition des équipes</h4>
     <p style="color:var(--text-soft);font-size:.9rem">Saisissez la liste des élèves, puis répartissez-les manuellement ou automatiquement. Les compositions seront enregistrées avec la séance.</p>
@@ -3532,6 +3550,7 @@ function renderTeamComposition() {
       <button type="button" class="btn btn-secondary btn-sm" data-compose="clear">Répartition manuelle / Tout désaffecter</button>
     </div>
     <p style="font-size:.86rem;color:var(--text-soft)">${placed} / ${roster.length} élèves affectés · ${count} équipes · affectation individuelle ci-dessous</p>
+    ${missing||mismatch||duplicates.length?`<p role="alert" style="padding:10px;border-radius:9px;background:#fff1e8;color:#9a3412">${missing?`${missing} élève(s) non affecté(s). `:''}${mismatch?`Liste : ${roster.length} élèves, effectif paramétré : ${state.draft.participantCount}. `:''}${duplicates.length?'Noms en double dans la liste.':''}</p>`:''}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:14px 0">
       ${names.map((name,i)=>`<div style="border:1px solid #d6e3df;border-radius:12px;padding:12px;background:rgba(90,140,120,.05)">
         <strong>${escapeHtml(name)}</strong> <small>(${groups[i].length})</small>
@@ -4125,6 +4144,19 @@ function createTeamsForLaunch(options) {
 }
 
 function validateDraftBeforeLaunch(options, teams) {
+  if (isTeamBasedDraft()) {
+    const roster=getCompositionRoster();
+    if (roster.length) {
+      if (roster.length!==Number(state.draft.participantCount)) return {valid:false,message:`La liste contient ${roster.length} élèves pour un effectif annoncé de ${state.draft.participantCount}. Corrigez l'effectif ou la liste.`};
+      const assigned=state.draft.teamAssignments||{};
+      const config=getSelectedConfigurationForSource(state.draft);
+      const missing=roster.filter((_,i)=>!Number.isInteger(Number(assigned[i]))||assigned[i]===undefined||Number(assigned[i])<0||Number(assigned[i])>=config.teamCount);
+      if (missing.length) return {valid:false,message:`${missing.length} élève(s) non affecté(s) : ${missing.slice(0,4).join(', ')}.`};
+      if (new Set(roster.map(n=>n.toLocaleLowerCase('fr'))).size!==roster.length) return {valid:false,message:'La liste contient des noms en double.'};
+      const groups=getSessionTeamCompositions();
+      if (groups.some(g=>!g.students.length)) return {valid:false,message:'Au moins une équipe est vide.'};
+    }
+  }
   if (options.format === 'challenge') {
     const validation = getChallengePlacementValidation(state.draft);
     if (validation.duplicates.length || validation.unknown.length || validation.unplaced.length || validation.assigned.length !== validation.players.length) {
@@ -4185,7 +4217,7 @@ async function launchTournament() {
     const teams = createTeamsForLaunch(options);
     const draftValidation = validateDraftBeforeLaunch(options, teams);
     if (!draftValidation.valid) {
-      const setupLabel = options.format === 'challenge' ? 'Classement Défi incomplet.' : 'Placement Ladder incomplet.';
+      const setupLabel = isTeamBasedDraft() ? 'Composition des équipes incomplète.' : options.format === 'challenge' ? 'Classement Défi incomplet.' : 'Placement Ladder incomplet.';
       window.alert(`${setupLabel} ${draftValidation.message}`);
       return;
     }
@@ -5930,9 +5962,14 @@ function handleGlobalClick(event) {
 
 function handleGlobalInput(event) {
   if (event.target.id === 'compositionRoster') {
-    state.draft.studentNamesText=event.target.value;
-    state.draft.teamAssignments={};state.draft.teamCompositionMode='manual';
+    updateCompositionRoster(event.target.value);
+    state.draft.teamCompositionMode='manual';
     persistState();return;
+  }
+  if (event.target.id === 'customTeamCountInput') {
+    if (event.type==='input') return;
+    state.draft.customTeamCount=event.target.value===''?0:clampNumber(Number(event.target.value),2,16,2);
+    state.draft.selectedConfigKey='';renderNewTournamentView();persistState();return;
   }
   if (event.target.matches('[data-composition-index]')) {
     const i=Number(event.target.dataset.compositionIndex),v=event.target.value;
