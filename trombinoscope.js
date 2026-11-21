@@ -2,12 +2,34 @@
 /* Import local du trombinoscope PRONOTE, vérification avant création. */
 window.EPSTrombinoscope = (() => {
   const key = name => name.trim().toLocaleLowerCase('fr');
-  const readImage = file => new Promise((resolve,reject) => {
-    const url=URL.createObjectURL(file), image=new Image();
-    image.onload=()=>{URL.revokeObjectURL(url);resolve(image);};
-    image.onerror=()=>{URL.revokeObjectURL(url);reject(Error('Image illisible'));};
-    image.src=url;
-  });
+  async function readImage(file) {
+    // Sur iPad, certains fichiers issus de Photos/iCloud ne se chargent pas via blob:.
+    // Une seconde tentative via data: permet de couvrir davantage de captures.
+    const decode = src => new Promise((resolve,reject)=>{
+      const image=new Image();
+      image.onload=()=>image.naturalWidth&&image.naturalHeight?resolve(image):reject(Error('Dimensions invalides'));
+      image.onerror=()=>reject(Error('Décodage impossible'));
+      image.src=src;
+    });
+    const url=URL.createObjectURL(file);
+    try {return await decode(url);}
+    catch(error) {
+      try {
+        const data=await new Promise((resolve,reject)=>{
+          const reader=new FileReader();
+          reader.onload=()=>resolve(reader.result);
+          reader.onerror=()=>reject(reader.error);
+          reader.readAsDataURL(file);
+        });
+        return await decode(data);
+      } catch(fallbackError) {
+        const ext=(file.name||'').split('.').pop().toLowerCase();
+        if(ext==='heic'||ext==='heif'||/hei[cf]/i.test(file.type))
+          throw Error('Format HEIC non reconnu par Safari. Dans Photos, ouvre le trombinoscope, fais une capture d’écran, puis importe cette capture PNG/JPG.');
+        throw Error('Impossible d’ouvrir cette image ('+(file.name||'fichier')+'). Essaie une capture d’écran PNG ou JPG depuis Photos, puis réimporte-la.');
+      }
+    } finally {URL.revokeObjectURL(url);}
+  }
   function crop(image,x,y,w,h) {
     const c=document.createElement('canvas');c.width=96;c.height=116;
     c.getContext('2d').drawImage(image,x,y,w,h,0,0,96,116);
@@ -45,7 +67,7 @@ window.EPSTrombinoscope = (() => {
     } finally {await worker.terminate();}
   }
   async function open(file,onSave) {
-    if(!file?.type?.startsWith('image/'))throw Error('Choisis une capture JPG ou PNG.');
+    if(!file || !(file.type?.startsWith('image/') || /\.(png|jpe?g|webp|heic|heif)$/i.test(file.name||'')))throw Error('Choisis une capture JPG ou PNG.');
     if(file.size>12e6)throw Error('Image trop volumineuse (12 Mo maximum).');
     const image=await readImage(file), tiles=cells(image);
     const overlay=document.createElement('div');
