@@ -5428,6 +5428,8 @@ function openClassroomModal(config = {}) {
           </label>
           <label class="field"><span>Élèves de la classe (un par ligne)</span><textarea id="classroomRosterInputModal" rows="6" placeholder="NOM Prénom&#10;NOM Prénom" style="width:100%;padding:12px;border:1px solid #d4e0d9;border-radius:12px"></textarea></label>
           <label class="btn btn-secondary btn-sm" style="cursor:pointer">Importer CSV / TXT<input id="classroomRosterFileModal" type="file" accept=".csv,.txt,text/csv,text/plain" style="display:none"></label>
+          <label class="btn btn-primary btn-sm" style="cursor:pointer">Importer trombinoscope PRONOTE<input id="classroomTrombiFileModal" type="file" accept="image/jpeg,image/png,image/webp" style="display:none"></label>
+          <p id="classroomTrombiStatus" style="font-size:.85rem;color:var(--text-soft)">Capture JPG/PNG : reconnaissance locale, vérification des noms et des portraits.</p>
           <p style="font-size:.82rem;color:#64748b">Les photos du trombinoscope pourront être ajoutées lors de la composition des équipes. L'import automatique des noms depuis une image n'est pas encore disponible.</p>
           <button class="btn btn-primary btn-lg" type="button" id="classroomCreateConfirmBtn">Enregistrer la classe et les élèves</button>
         </div>
@@ -5463,6 +5465,19 @@ function openClassroomModal(config = {}) {
       ignoreBtn.addEventListener('click', () => cleanup(null));
     }
 
+    let importedTrombiStudents=[];
+    const trombiInput=overlay.querySelector('#classroomTrombiFileModal');
+    trombiInput?.addEventListener('change',async()=>{
+      const file=trombiInput.files?.[0];if(!file)return;
+      try {
+        await window.EPSTrombinoscope.open(file,students=>{
+          importedTrombiStudents=students;
+          overlay.querySelector('#classroomRosterInputModal').value=students.map(x=>x.name).join('\n');
+          overlay.querySelector('#classroomTrombiStatus').textContent=students.length+' élèves et portraits prêts à enregistrer.';
+        });
+      }catch(error){window.alert(error.message||'Import impossible.');}
+      trombiInput.value='';
+    });
     const rosterFile=overlay.querySelector('#classroomRosterFileModal');
     rosterFile?.addEventListener('change',async()=>{const file=rosterFile.files?.[0];if(!file)return;if(file.size>1024*1024){window.alert('Fichier trop volumineux.');return;}try{overlay.querySelector('#classroomRosterInputModal').value=parseCompositionFile(await file.text()).join('\n');}catch(e){window.alert('Import impossible.');}});
     const createConfirm = overlay.querySelector('#classroomCreateConfirmBtn');
@@ -5481,7 +5496,7 @@ function openClassroomModal(config = {}) {
           sport: config.sport || state.draft.sport || 'raquette',
           createdAt: new Date().toISOString(),
           sessionIds: [],
-          students: names.map(name=>({name,totalPlayed:0,totalWins:0})),
+          students: names.map(name=>({name,totalPlayed:0,totalWins:0,portrait:importedTrombiStudents.find(x=>x.name===name)?.portrait||''})),
         };
         upsertClassroom(classroom);
         cleanup(classroom.id);
