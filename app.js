@@ -3515,6 +3515,8 @@ function parseCompositionFile(content) {
   const last=headers.findIndex(h=>h==='nom'||h==='nom de famille');
   const first=headers.findIndex(h=>h==='prenom'||h==='prenoms');
   if(last>=0&&first>=0) return lines.slice(1).map(line=>{const cols=split(line);return [cols[last],cols[first]].filter(Boolean).join(' ').trim();}).filter(Boolean);
+  const single=headers.findIndex(h=>h==='eleve'||h==='nom complet'||h==='nom prenom');
+  if(single>=0) return lines.slice(1).map(line=>split(line)[single]||'').filter(Boolean);
   return lines.map(line=>line.trim()).filter(Boolean);
 }
 function getCompositionRoster() {
@@ -3608,8 +3610,10 @@ function renderLiveTeamCompositions(session) {
   const groups = session?.teamCompositions;
   panel.classList.toggle('hidden', !Array.isArray(groups) || !groups.length);
   if (!Array.isArray(groups)||!groups.length)return;
-  panel.innerHTML='<summary style="cursor:pointer;font-weight:700">Voir les compositions des équipes</summary><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-top:12px">'+
+  const wasOpen = panel.open;
+  panel.innerHTML='<summary style="cursor:pointer;font-weight:700">Compositions des équipes · '+groups.reduce((n,g)=>n+g.students.length,0)+' élèves</summary><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-top:12px">'+
     groups.map(g=>'<div><strong>'+escapeHtml(g.name)+'</strong><div style="font-size:.9rem;line-height:1.7">'+(g.students.length?g.students.map(escapeHtml).join('<br>'):'Aucun élève renseigné')+'</div></div>').join('')+'</div>';
+  panel.open=wasOpen;
 }
 
 function renderParticipantSection() {
