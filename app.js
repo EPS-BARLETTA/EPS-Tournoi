@@ -3539,45 +3539,41 @@ function renderTeamComposition() {
   const active = Boolean(isTeamBasedDraft() && config);
   panel.classList.toggle('hidden', !active);
   if (!active) return;
-  const count = config.teamCount;
   const names = getDraftTeamNames(config);
   const roster = getCompositionRoster();
   const assignments = state.draft.teamAssignments || {};
-  const groups = Array.from({length:count}, () => []);
-  roster.forEach((name,i) => {
-    const team = Number(assignments[i]);
-    if (Number.isInteger(team) && team >= 0 && team < count) groups[team].push(name);
+  const groups = names.map(() => []);
+  const unassigned = [];
+  roster.forEach((name, i) => {
+    const team = assignments[i] === undefined ? -1 : Number(assignments[i]);
+    if (Number.isInteger(team) && team >= 0 && team < names.length) groups[team].push({name, i});
+    else unassigned.push({name, i});
   });
-  const placed = groups.reduce((n,g)=>n+g.length,0);
-  const missing = roster.length-placed;
   const mismatch = roster.length && roster.length !== Number(state.draft.participantCount);
   const duplicates = roster.filter((name,i)=>roster.findIndex(other=>other.toLocaleLowerCase('fr')===name.toLocaleLowerCase('fr'))!==i);
+  const options = (selected) => '<option value="">Sans équipe</option>' +
+    names.map((name, i) => '<option value="'+i+'" '+(i===selected?'selected':'')+'>'+escapeHtml(name)+'</option>').join('');
+  const student = (entry, selected) => '<div class="composition-student"><span>'+escapeHtml(entry.name)+'</span><select aria-label="Équipe de '+escapeHtml(entry.name)+'" data-composition-index="'+entry.i+'">'+options(selected)+'</select></div>';
   panel.innerHTML = `
-    <h4 style="margin:0 0 8px">Créer et composer mes équipes</h4>
-    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0;padding:12px;border:1px solid #d6e3df;border-radius:12px"><strong>${count} équipes créées</strong><button type="button" class="btn btn-secondary btn-sm" data-team-count-action="minus" ${count<=2?'disabled':''}>− Supprimer une équipe</button><button type="button" class="btn btn-primary btn-sm" data-team-count-action="plus" ${count>=16||count>=state.draft.participantCount?'disabled':''}>+ Créer une équipe</button></div>
-    <p style="color:var(--text-soft);font-size:.9rem">Saisissez la liste des élèves, puis répartissez-les manuellement ou automatiquement. Les compositions seront enregistrées avec la séance.</p>
-    <label class="field"><span>Liste des élèves (un par ligne)</span>
-      <textarea id="compositionRoster" rows="5" placeholder="Nom Prénom&#10;Nom Prénom&#10;Nom Prénom">${escapeHtml(state.draft.studentNamesText)}</textarea>
-    </label>
-    <div class="composition-actions" style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0">
-      <button type="button" class="btn btn-primary btn-sm" data-compose="auto">Répartir automatiquement</button>
-      <button type="button" class="btn btn-secondary btn-sm" data-compose="clear">Tout désaffecter</button>
-      <button type="button" class="btn btn-secondary btn-sm" data-compose="match-count">Adapter l'effectif à la liste</button>
-      <label class="btn btn-secondary btn-sm" style="cursor:pointer">Importer CSV / TXT<input id="compositionFileInput" type="file" accept=".csv,.txt,text/csv,text/plain" style="display:none"></label>
+    <div class="composition-heading"><div><h4>Mes équipes</h4><p>Crée tes équipes et déplace les élèves directement depuis leurs cartes.</p></div><span class="composition-total">${roster.length-unassigned.length}/${roster.length} affectés</span></div>
+    <div class="composition-toolbar">
+      <div class="composition-count"><button type="button" data-team-count-action="minus" aria-label="Retirer une équipe" ${names.length<=2?'disabled':''}>−</button><strong>${names.length} équipes</strong><button type="button" data-team-count-action="plus" aria-label="Ajouter une équipe" ${names.length>=16||names.length>=state.draft.participantCount?'disabled':''}>+</button></div>
+      <button type="button" class="btn btn-primary btn-sm" data-compose="auto">Répartition automatique</button>
+      <button type="button" class="btn btn-secondary btn-sm" data-compose="clear">Vider les équipes</button>
+      <button type="button" class="btn btn-secondary btn-sm" data-compose="match-count">Synchroniser l'effectif</button>
     </div>
-    <p style="font-size:.83rem;color:var(--text-soft)">En mode manuel, choisissez une équipe pour chaque élève ci-dessous. En mode automatique, les effectifs sont équilibrés. L'import accepte une liste simple ou un CSV avec colonnes Nom et Prénom.</p>
-    <p style="font-size:.86rem;color:var(--text-soft)">${placed} / ${roster.length} élèves affectés · ${count} équipes · affectation individuelle ci-dessous</p>
-    ${missing||mismatch||duplicates.length?`<p role="alert" style="padding:10px;border-radius:9px;background:#fff1e8;color:#9a3412">${missing?`${missing} élève(s) non affecté(s). `:''}${mismatch?`Liste : ${roster.length} élèves, effectif paramétré : ${state.draft.participantCount}. `:''}${duplicates.length?'Noms en double dans la liste.':''}</p>`:''}
-    <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:14px 0">
-      ${names.map((name,i)=>`<div style="border:1px solid #d6e3df;border-radius:12px;padding:12px;background:rgba(90,140,120,.05)">
-        <strong>${escapeHtml(name)}</strong> <small>(${groups[i].length})</small>
-        <div style="font-size:.87rem;line-height:1.8;margin-top:7px">${groups[i].length?groups[i].map(escapeHtml).join('<br>'):'<em>Aucun élève</em>'}</div>
-      </div>`).join('')}
+    ${mismatch||duplicates.length?'<div class="composition-warning" role="alert">'+(mismatch?'Liste de '+roster.length+' élèves, mais effectif réglé sur '+state.draft.participantCount+'. Cliquez sur « Synchroniser l’effectif ». ':'')+(duplicates.length?'Attention : noms en double.':'')+'</div>':''}
+    <details class="composition-roster-editor" id="compositionRosterDetails">
+      <summary>Modifier / importer la liste des élèves (${roster.length})</summary>
+      <p>Un élève par ligne. Les affectations sont conservées lorsque tu corriges la liste.</p>
+      <textarea id="compositionRoster" rows="6" placeholder="Nom Prénom&#10;Nom Prénom">${escapeHtml(state.draft.studentNamesText)}</textarea>
+      <label class="btn btn-secondary btn-sm composition-import">Importer CSV / TXT<input id="compositionFileInput" type="file" accept=".csv,.txt,text/csv,text/plain" style="display:none"></label>
+    </details>
+    <div class="composition-team-grid">
+      ${names.map((name,i)=>'<section class="composition-team"><div class="composition-team-head"><span class="composition-team-number">'+(i+1)+'</span><input aria-label="Nom de l’équipe '+(i+1)+'" data-team-name-index="'+i+'" maxlength="30" value="'+escapeHtml(name)+'"><span class="composition-team-size">'+groups[i].length+' él.</span></div><div class="composition-students">'+(groups[i].length?groups[i].map(entry=>student(entry,i)).join(''):'<p class="composition-empty">Ajoute des élèves à cette équipe</p>')+'</div></section>').join('')}
     </div>
-    ${roster.length ? '<h4>Affecter les élèves</h4><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:9px">' +
-      roster.map((name,i)=>`<label class="field"><span>${escapeHtml(name)}</span><select data-composition-index="${i}">
-      <option value="">Non affecté</option>${names.map((team,t)=>`<option value="${t}" ${Number(assignments[i])===t && assignments[i]!==undefined?'selected':''}>${escapeHtml(team)}</option>`).join('')}
-      </select></label>`).join('') + '</div>' : ''}
+    ${unassigned.length?'<section class="composition-unassigned"><h4>Élèves sans équipe ('+unassigned.length+')</h4><div class="composition-students">'+unassigned.map(entry=>student(entry,-1)).join('')+'</div></section>':''}
+    ${!roster.length?'<p class="composition-empty">Aucun élève dans la liste. Ouvre « Modifier / importer la liste » ci-dessus pour commencer.</p>':''}
   `;
 }
 function autoAssignTeamComposition() {
@@ -6136,7 +6132,7 @@ function handleGlobalSubmit(event) {
 }
 
 function handleGlobalChange(event) {
-  if (event.target.id === 'compositionRoster') {renderTeamComposition();persistState();return;}
+  if (event.target.id === 'compositionRoster') {const wasOpen=true;renderTeamComposition();const details=document.getElementById('compositionRosterDetails');if(details)details.open=wasOpen;persistState();return;}
   if (event.target.id === 'compositionFileInput') {
     const file=event.target.files?.[0];
     if (!file) return;
