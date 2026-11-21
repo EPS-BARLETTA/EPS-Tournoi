@@ -5426,7 +5426,10 @@ function openClassroomModal(config = {}) {
             <span>Nom de la classe</span>
             <input id="classroomNameInputModal" type="text" placeholder="4B" />
           </label>
-          <button class="btn btn-primary btn-lg" type="button" id="classroomCreateConfirmBtn">Créer et associer</button>
+          <label class="field"><span>Élèves de la classe (un par ligne)</span><textarea id="classroomRosterInputModal" rows="6" placeholder="NOM Prénom&#10;NOM Prénom" style="width:100%;padding:12px;border:1px solid #d4e0d9;border-radius:12px"></textarea></label>
+          <label class="btn btn-secondary btn-sm" style="cursor:pointer">Importer CSV / TXT<input id="classroomRosterFileModal" type="file" accept=".csv,.txt,text/csv,text/plain" style="display:none"></label>
+          <p style="font-size:.82rem;color:#64748b">Les photos du trombinoscope pourront être ajoutées lors de la composition des équipes. L'import automatique des noms depuis une image n'est pas encore disponible.</p>
+          <button class="btn btn-primary btn-lg" type="button" id="classroomCreateConfirmBtn">Enregistrer la classe et les élèves</button>
         </div>
       </div>
     `;
@@ -5460,12 +5463,17 @@ function openClassroomModal(config = {}) {
       ignoreBtn.addEventListener('click', () => cleanup(null));
     }
 
+    const rosterFile=overlay.querySelector('#classroomRosterFileModal');
+    rosterFile?.addEventListener('change',async()=>{const file=rosterFile.files?.[0];if(!file)return;if(file.size>1024*1024){window.alert('Fichier trop volumineux.');return;}try{overlay.querySelector('#classroomRosterInputModal').value=parseCompositionFile(await file.text()).join('\n');}catch(e){window.alert('Import impossible.');}});
     const createConfirm = overlay.querySelector('#classroomCreateConfirmBtn');
     if (createConfirm) {
       createConfirm.addEventListener('click', () => {
         const input = overlay.querySelector('#classroomNameInputModal');
         const name = String(input?.value || '').trim();
         if (!name) return;
+        const names=String(overlay.querySelector('#classroomRosterInputModal')?.value||'').split(/\r?\n/).map(n=>n.trim()).filter(Boolean);
+        if(names.length>48){window.alert('Maximum 48 élèves par classe.');return;}
+        if(new Set(names.map(n=>n.toLocaleLowerCase('fr'))).size!==names.length){window.alert('La liste contient des noms en double.');return;}
         const classroom = {
           id: uniqueId('class'),
           name,
@@ -5473,7 +5481,7 @@ function openClassroomModal(config = {}) {
           sport: config.sport || state.draft.sport || 'raquette',
           createdAt: new Date().toISOString(),
           sessionIds: [],
-          students: [],
+          students: names.map(name=>({name,totalPlayed:0,totalWins:0})),
         };
         upsertClassroom(classroom);
         cleanup(classroom.id);
