@@ -3465,7 +3465,7 @@ function renderConfigSuggestions() {
   const selectedExplanation = selected?.explanation || suggestions[0].explanation;
   dom.configSuggestions.innerHTML = `
     <div class="suggestion-note">Recommandation EPS terrain</div>
-    <label class="field" style="max-width:240px;margin:10px 0"><span>Nombre d'équipes souhaité (optionnel)</span><input id="customTeamCountInput" type="number" min="2" max="16" value="${state.draft.customTeamCount || ''}" placeholder="Ex. 6" /></label>
+    <label class="field" style="max-width:240px;margin:10px 0"><span>Nombre d'équipes à créer</span><input id="customTeamCountInput" type="number" min="2" max="16" value="${state.draft.customTeamCount || ''}" placeholder="Ex. 6" /></label>
     <div class="suggestion-chip-row">
       ${suggestions
         .map(entry => `<button class="suggestion-chip ${selected?.key === entry.key ? 'selected' : ''} ${entry.recommended ? 'is-recommended' : ''}" type="button" data-config-key="${entry.key}">${escapeHtml(entry.label)} · ${escapeHtml(entry.summary)}</button>`)
@@ -3553,7 +3553,8 @@ function renderTeamComposition() {
   const mismatch = roster.length && roster.length !== Number(state.draft.participantCount);
   const duplicates = roster.filter((name,i)=>roster.findIndex(other=>other.toLocaleLowerCase('fr')===name.toLocaleLowerCase('fr'))!==i);
   panel.innerHTML = `
-    <h4 style="margin:0 0 8px">Composition des équipes</h4>
+    <h4 style="margin:0 0 8px">Créer et composer mes équipes</h4>
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;margin:12px 0;padding:12px;border:1px solid #d6e3df;border-radius:12px"><strong>${count} équipes créées</strong><button type="button" class="btn btn-secondary btn-sm" data-team-count-action="minus" ${count<=2?'disabled':''}>− Supprimer une équipe</button><button type="button" class="btn btn-primary btn-sm" data-team-count-action="plus" ${count>=16||count>=state.draft.participantCount?'disabled':''}>+ Créer une équipe</button></div>
     <p style="color:var(--text-soft);font-size:.9rem">Saisissez la liste des élèves, puis répartissez-les manuellement ou automatiquement. Les compositions seront enregistrées avec la séance.</p>
     <label class="field"><span>Liste des élèves (un par ligne)</span>
       <textarea id="compositionRoster" rows="5" placeholder="Nom Prénom&#10;Nom Prénom&#10;Nom Prénom">${escapeHtml(state.draft.studentNamesText)}</textarea>
@@ -5755,6 +5756,20 @@ function renderHomeView() {
 /* === Événements === */
 
 function handleGlobalClick(event) {
+  const teamCountButton = event.target.closest('[data-team-count-action]');
+  if (teamCountButton) {
+    const config=getSelectedConfigurationForSource(state.draft);
+    if (!config) return;
+    const next=config.teamCount+(teamCountButton.dataset.teamCountAction==='plus'?1:-1);
+    if (next<2||next>16||next>state.draft.participantCount) return;
+    if (next<config.teamCount && Object.values(state.draft.teamAssignments||{}).some(v=>Number(v)>=next)) {
+      if(!window.confirm('La dernière équipe contient des élèves. Ils deviendront non affectés. Continuer ?'))return;
+      Object.keys(state.draft.teamAssignments).forEach(i=>{if(Number(state.draft.teamAssignments[i])>=next)delete state.draft.teamAssignments[i];});
+    }
+    state.draft.customTeamCount=next;
+    state.draft.selectedConfigKey='';
+    renderNewTournamentView();persistState();return;
+  }
   const compositionButton = event.target.closest('[data-compose]');
   if (compositionButton) {
     const action = compositionButton.dataset.compose;
@@ -5999,7 +6014,7 @@ function handleGlobalInput(event) {
   }
   if (event.target.id === 'customTeamCountInput') {
     if (event.type==='input') return;
-    state.draft.customTeamCount=event.target.value===''?0:clampNumber(Number(event.target.value),2,16,2);
+    state.draft.customTeamCount=event.target.value===''?0:clampNumber(Number(event.target.value),2,Math.min(16,state.draft.participantCount),2);
     state.draft.selectedConfigKey='';renderNewTournamentView();persistState();return;
   }
   if (event.target.matches('[data-composition-index]')) {
