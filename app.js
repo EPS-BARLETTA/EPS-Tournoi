@@ -5430,7 +5430,7 @@ function openClassroomModal(config = {}) {
           <label class="btn btn-secondary btn-sm" style="cursor:pointer">Importer CSV / TXT<input id="classroomRosterFileModal" type="file" accept=".csv,.txt,text/csv,text/plain" style="display:none"></label>
           <label class="btn btn-primary btn-sm" style="cursor:pointer">Importer trombinoscope PRONOTE<input id="classroomTrombiFileModal" type="file" accept="image/jpeg,image/png,image/webp" style="display:none"></label>
           <p id="classroomTrombiStatus" style="font-size:.85rem;color:var(--text-soft)">Capture JPG/PNG : reconnaissance locale, vérification des noms et des portraits.</p>
-          <p style="font-size:.82rem;color:#64748b">Après import, vérifie les noms et les photos avant d’enregistrer. Les données restent sur cet appareil.</p>
+          <p style="font-size:.82rem;color:#64748b">Le trombinoscope est analysé automatiquement. Corrige seulement les noms mal reconnus, puis enregistre la classe.</p>
           <button class="btn btn-primary btn-lg" type="button" id="classroomCreateConfirmBtn">Enregistrer la classe et les élèves</button>
         </div>
       </div>
@@ -5470,10 +5470,17 @@ function openClassroomModal(config = {}) {
     trombiInput?.addEventListener('change',async()=>{
       const file=trombiInput.files?.[0];if(!file)return;
       try {
-        await window.EPSTrombinoscope.open(file,students=>{
-          importedTrombiStudents=students;
-          overlay.querySelector('#classroomRosterInputModal').value=students.map(x=>x.name).join('\n');
-          overlay.querySelector('#classroomTrombiStatus').textContent=students.length+' élèves et portraits prêts à enregistrer.';
+        window.RosterPortraits.importRoster({
+          file,
+          items: [],
+          itemName: name => ({name}),
+          className: overlay.querySelector('#classroomNameInputModal')?.value.trim() || 'sans nom',
+          save: students => {
+            importedTrombiStudents=students.map(x=>({name:x.line,portrait:x.portrait}));
+            overlay.querySelector('#classroomRosterInputModal').value=students.map(x=>x.line).join('\n');
+            overlay.querySelector('#classroomTrombiStatus').textContent=students.length+' élèves et portraits reconnus. Vérifie puis enregistre la classe.';
+            return true;
+          }
         });
       }catch(error){window.alert(error.message||'Import impossible.');}
       trombiInput.value='';
