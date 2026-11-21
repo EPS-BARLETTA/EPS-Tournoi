@@ -2321,3 +2321,15 @@ th {
 .composition-live-student { display:flex; align-items:center; gap:9px; padding:4px 0; }
 .composition-live-student .composition-avatar { width:30px; height:36px; }
 .composition-roster-editor .composition-import { margin:6px 6px 6px 0; }
+
+
+.trombi-overlay{position:fixed;inset:0;z-index:9999;background:#142238b8;display:flex;align-items:center;justify-content:center;padding:14px}
+.trombi-dialog{width:min(100%,940px);max-height:94vh;overflow:auto;background:#fff;color:#182a34;border-radius:20px;padding:20px;box-shadow:0 18px 55px #0003}
+.trombi-dialog header,.trombi-dialog footer{display:flex;align-items:center;justify-content:space-between;gap:12px;position:sticky;background:#fff;z-index:1;padding:8px 0}
+.trombi-dialog header{top:0}.trombi-dialog footer{bottom:0;justify-content:flex-end}
+.trombi-dialog header h3{margin:0}
+.trombi-grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(125px,1fr));gap:12px;margin:16px 0}
+.trombi-tile{display:flex;flex-direction:column;gap:7px;border:1px solid #dbe6e1;border-radius:13px;padding:8px;background:#f7faf8;min-width:0}
+.trombi-tile img{width:100%;aspect-ratio:96/116;object-fit:cover;border-radius:9px}
+.trombi-tile input{width:100%;box-sizing:border-box;padding:9px 7px;border:1px solid #ccd8d2;border-radius:8px;font-size:.85rem}
+@media(max-width:600px){.trombi-grid{grid-template-columns:repeat(2,minmax(0,1fr))}.trombi-dialog{padding:12px}}
