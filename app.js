@@ -3506,6 +3506,17 @@ function updateCompositionRoster(nextText) {
   getCompositionRoster().forEach((name,i)=>{const bucket=buckets.get(name.toLocaleLowerCase('fr'));if(bucket?.length){const team=bucket.shift();if(team!==undefined)updated[i]=team;}});
   state.draft.teamAssignments=updated;
 }
+function parseCompositionFile(content) {
+  const lines=String(content||'').replace(/^\uFEFF/,'').split(/\r?\n/).map(line=>line.trim()).filter(Boolean);
+  if (!lines.length) return [];
+  const delimiter=lines[0].includes(';')?';':lines[0].includes('\t')?'\t':',';
+  const split=line=>line.split(delimiter).map(v=>v.replace(/^["']|["']$/g,'').trim());
+  const headers=split(lines[0]).map(h=>h.toLocaleLowerCase('fr').normalize('NFD').replace(/[\u0300-\u036f]/g,''));
+  const last=headers.findIndex(h=>h==='nom'||h==='nom de famille');
+  const first=headers.findIndex(h=>h==='prenom'||h==='prenoms');
+  if(last>=0&&first>=0) return lines.slice(1).map(line=>{const cols=split(line);return [cols[last],cols[first]].filter(Boolean).join(' ').trim();}).filter(Boolean);
+  return lines.map(line=>line.trim()).filter(Boolean);
+}
 function getCompositionRoster() {
   const typed = parseNames(state.draft.studentNamesText);
   return typed.length ? typed : [];
@@ -3545,10 +3556,13 @@ function renderTeamComposition() {
     <label class="field"><span>Liste des élèves (un par ligne)</span>
       <textarea id="compositionRoster" rows="5" placeholder="Nom Prénom&#10;Nom Prénom&#10;Nom Prénom">${escapeHtml(state.draft.studentNamesText)}</textarea>
     </label>
-    <div style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0">
-      <button type="button" class="btn btn-secondary btn-sm" data-compose="auto">Répartir automatiquement</button>
-      <button type="button" class="btn btn-secondary btn-sm" data-compose="clear">Répartition manuelle / Tout désaffecter</button>
+    <div class="composition-actions" style="display:flex;gap:8px;flex-wrap:wrap;margin:12px 0">
+      <button type="button" class="btn btn-primary btn-sm" data-compose="auto">Répartir automatiquement</button>
+      <button type="button" class="btn btn-secondary btn-sm" data-compose="clear">Tout désaffecter</button>
+      <button type="button" class="btn btn-secondary btn-sm" data-compose="match-count">Adapter l'effectif à la liste</button>
+      <label class="btn btn-secondary btn-sm" style="cursor:pointer">Importer CSV / TXT<input id="compositionFileInput" type="file" accept=".csv,.txt,text/csv,text/plain" style="display:none"></label>
     </div>
+    <p style="font-size:.83rem;color:var(--text-soft)">En mode manuel, choisissez une équipe pour chaque élève ci-dessous. En mode automatique, les effectifs sont équilibrés. L'import accepte une liste simple ou un CSV avec colonnes Nom et Prénom.</p>
     <p style="font-size:.86rem;color:var(--text-soft)">${placed} / ${roster.length} élèves affectés · ${count} équipes · affectation individuelle ci-dessous</p>
     ${missing||mismatch||duplicates.length?`<p role="alert" style="padding:10px;border-radius:9px;background:#fff1e8;color:#9a3412">${missing?`${missing} élève(s) non affecté(s). `:''}${mismatch?`Liste : ${roster.length} élèves, effectif paramétré : ${state.draft.participantCount}. `:''}${duplicates.length?'Noms en double dans la liste.':''}</p>`:''}
     <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:10px;margin:14px 0">
@@ -5739,8 +5753,20 @@ function renderHomeView() {
 function handleGlobalClick(event) {
   const compositionButton = event.target.closest('[data-compose]');
   if (compositionButton) {
-    if (compositionButton.dataset.compose === 'auto') autoAssignTeamComposition();
-    else {state.draft.teamAssignments={};state.draft.teamCompositionMode='manual';}
+    const action = compositionButton.dataset.compose;
+    if (action === 'auto') {
+      if (getCompositionRoster().length && Object.keys(state.draft.teamAssignments || {}).length && !window.confirm('Remplacer la répartition actuelle par une nouvelle répartition aléatoire ?')) return;
+      autoAssignTeamComposition();
+    } else if (action === 'clear') {
+      if (Object.keys(state.draft.teamAssignments || {}).length && !window.confirm('Désaffecter tous les élèves ?')) return;
+      state.draft.teamAssignments={};state.draft.teamCompositionMode='manual';
+    } else if (action === 'match-count') {
+      const count=getCompositionRoster().length;
+      if (!count) {window.alert('Saisissez ou importez d’abord une liste d’élèves.');return;}
+      if (count < 4 || count > 48) {window.alert('L’effectif doit être compris entre 4 et 48 élèves.');return;}
+      state.draft.participantCount=count;
+      renderNewTournamentView();persistState();return;
+    }
     renderTeamComposition();persistState();return;
   }
   const viewTarget = event.target.closest('[data-view-target]');
@@ -5772,6 +5798,7 @@ function handleGlobalClick(event) {
 
   const configButton = event.target.closest('[data-config-key]');
   if (configButton) {
+    state.draft.customTeamCount = 0;
     state.draft.selectedConfigKey = configButton.dataset.configKey;
     hideSimulationPanel();
     renderNewTournamentView();
@@ -6091,6 +6118,20 @@ function handleGlobalSubmit(event) {
 
 function handleGlobalChange(event) {
   if (event.target.id === 'compositionRoster') {renderTeamComposition();persistState();return;}
+  if (event.target.id === 'compositionFileInput') {
+    const file=event.target.files?.[0];
+    if (!file) return;
+    if (file.size > 1024*1024) {window.alert('Fichier trop volumineux (maximum 1 Mo).');return;}
+    file.text().then(content=>{
+      const names=parseCompositionFile(content);
+      if (!names.length) {window.alert('Aucun nom trouvé dans le fichier.');return;}
+      if (names.length>48) {window.alert('La liste dépasse 48 élèves.');return;}
+      updateCompositionRoster(names.join('\n'));
+      state.draft.participantCount=Math.max(4,names.length);
+      renderNewTournamentView();persistState();
+    }).catch(()=>window.alert('Impossible de lire le fichier.'));
+    return;
+  }
   handleGlobalInput(event);
 }
 
