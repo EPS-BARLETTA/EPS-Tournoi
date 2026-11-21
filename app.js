@@ -5430,7 +5430,7 @@ function openClassroomModal(config = {}) {
           <label class="btn btn-secondary btn-sm" style="cursor:pointer">Importer CSV / TXT<input id="classroomRosterFileModal" type="file" accept=".csv,.txt,text/csv,text/plain" style="display:none"></label>
           <label class="btn btn-primary btn-sm" style="cursor:pointer">Importer trombinoscope PRONOTE<input id="classroomTrombiFileModal" type="file" accept="image/jpeg,image/png,image/webp" style="display:none"></label>
           <p id="classroomTrombiStatus" style="font-size:.85rem;color:var(--text-soft)">Capture JPG/PNG : reconnaissance locale, vérification des noms et des portraits.</p>
-          <p style="font-size:.82rem;color:#64748b">Les photos du trombinoscope pourront être ajoutées lors de la composition des équipes. L'import automatique des noms depuis une image n'est pas encore disponible.</p>
+          <p style="font-size:.82rem;color:#64748b">Après import, vérifie les noms et les photos avant d’enregistrer. Les données restent sur cet appareil.</p>
           <button class="btn btn-primary btn-lg" type="button" id="classroomCreateConfirmBtn">Enregistrer la classe et les élèves</button>
         </div>
       </div>
@@ -5498,7 +5498,8 @@ function openClassroomModal(config = {}) {
           sessionIds: [],
           students: names.map(name=>({name,totalPlayed:0,totalWins:0,portrait:importedTrombiStudents.find(x=>x.name===name)?.portrait||''})),
         };
-        upsertClassroom(classroom);
+        if(!names.length){window.alert('Ajoute des élèves ou importe un trombinoscope avant d’enregistrer.');return;}
+        try {upsertClassroom(classroom);} catch(error) {window.alert('Enregistrement impossible : espace de stockage insuffisant sur cet iPad.');return;}
         cleanup(classroom.id);
       });
     }
