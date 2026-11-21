@@ -48,6 +48,7 @@ function createDefaultDraft() {
     customTeamCount: 0,
     teamCompositionMode: 'manual',
     teamAssignments: {},
+    studentPhotos: {},
     fields: 2,
     startTime: '10:00',
     endTime: '11:00',
@@ -2673,6 +2674,7 @@ function sanitizeState(raw) {
   next.draft.customTeamCount = clampNumber(Number(next.draft.customTeamCount) || 0, 0, 16, 0);
   next.draft.teamCompositionMode = next.draft.teamCompositionMode === 'auto' ? 'auto' : 'manual';
   next.draft.teamAssignments = next.draft.teamAssignments && typeof next.draft.teamAssignments === 'object' && !Array.isArray(next.draft.teamAssignments) ? next.draft.teamAssignments : {};
+  next.draft.studentPhotos = next.draft.studentPhotos && typeof next.draft.studentPhotos === 'object' && !Array.isArray(next.draft.studentPhotos) ? next.draft.studentPhotos : {};
   next.draft.sessionName = String(next.draft.sessionName || '');
   next.currentSession = source.currentSession && typeof source.currentSession === 'object' ? source.currentSession : null;
   next.lastStatsSessionId = source.lastStatsSessionId || null;
@@ -3519,6 +3521,41 @@ function parseCompositionFile(content) {
   if(single>=0) return lines.slice(1).map(line=>split(line)[single]||'').filter(Boolean);
   return lines.map(line=>line.trim()).filter(Boolean);
 }
+function getStudentPhoto(name) {
+  return state.draft.studentPhotos?.[name.toLocaleLowerCase('fr')] || '';
+}
+function photoAvatar(name) {
+  const photo=getStudentPhoto(name);
+  return photo ? '<img class="composition-avatar" alt="" src="'+photo+'">' : '<span class="composition-avatar composition-avatar-empty" aria-hidden="true">●</span>';
+}
+async function importTrombinoscopeImage(file) {
+  if (!file?.type?.startsWith('image/')) {window.alert('Choisis une image JPG ou PNG du trombinoscope.');return;}
+  if (file.size > 12*1024*1024) {window.alert('Image trop volumineuse (12 Mo maximum).');return;}
+  const image = new Image();
+  const objectUrl = URL.createObjectURL(file);
+  try {
+    await new Promise((resolve,reject)=>{image.onload=resolve;image.onerror=reject;image.src=objectUrl;});
+    const count=getCompositionRoster().length;
+    if (!count) {window.alert('Renseigne d’abord les noms des élèves dans le même ordre que le trombinoscope, puis importe la photo.');return;}
+    const columns=5, photoMap={...state.draft.studentPhotos};
+    for(let i=0;i<count;i++) {
+      const col=i%columns,row=Math.floor(i/columns);
+      // PRONOTE screenshot: 5 columns, photo above name; calibrated on supplied layout.
+      const x=image.width*(0.008+col*0.208);
+      const y=image.width*(0.063+row*0.259);
+      const w=image.width*0.135,h=image.width*0.173;
+      if(y+h>image.height)break;
+      const canvas=document.createElement('canvas');canvas.width=96;canvas.height=120;
+      canvas.getContext('2d').drawImage(image,x,y,w,h,0,0,96,120);
+      const name=getCompositionRoster()[i];
+      photoMap[name.toLocaleLowerCase('fr')]=canvas.toDataURL('image/jpeg',0.66);
+    }
+    state.draft.studentPhotos=photoMap;
+    try{persistState();}catch(error){window.alert('Stockage local saturé. Réduis la taille de l’image ou utilise moins de photos.');}
+    renderTeamComposition();
+    window.alert('Photos associées aux élèves selon leur position dans le trombinoscope. Vérifie chaque portrait : l’import ne reconnaît pas encore automatiquement les noms.');
+  } finally {URL.revokeObjectURL(objectUrl);}
+}
 function getCompositionRoster() {
   const typed = parseNames(state.draft.studentNamesText);
   return typed.length ? typed : [];
@@ -3553,7 +3590,7 @@ function renderTeamComposition() {
   const duplicates = roster.filter((name,i)=>roster.findIndex(other=>other.toLocaleLowerCase('fr')===name.toLocaleLowerCase('fr'))!==i);
   const options = (selected) => '<option value="">Sans équipe</option>' +
     names.map((name, i) => '<option value="'+i+'" '+(i===selected?'selected':'')+'>'+escapeHtml(name)+'</option>').join('');
-  const student = (entry, selected) => '<div class="composition-student"><span>'+escapeHtml(entry.name)+'</span><select aria-label="Équipe de '+escapeHtml(entry.name)+'" data-composition-index="'+entry.i+'">'+options(selected)+'</select></div>';
+  const student = (entry, selected) => '<div class="composition-student">'+photoAvatar(entry.name)+'<span>'+escapeHtml(entry.name)+'</span><select aria-label="Équipe de '+escapeHtml(entry.name)+'" data-composition-index="'+entry.i+'">'+options(selected)+'</select></div>';
   panel.innerHTML = `
     <div class="composition-heading"><div><h4>Mes équipes</h4><p>Crée tes équipes et déplace les élèves directement depuis leurs cartes.</p></div><span class="composition-total">${roster.length-unassigned.length}/${roster.length} affectés</span></div>
     <div class="composition-toolbar">
@@ -3568,6 +3605,8 @@ function renderTeamComposition() {
       <p>Un élève par ligne. Les affectations sont conservées lorsque tu corriges la liste.</p>
       <textarea id="compositionRoster" rows="6" placeholder="Nom Prénom&#10;Nom Prénom">${escapeHtml(state.draft.studentNamesText)}</textarea>
       <label class="btn btn-secondary btn-sm composition-import">Importer CSV / TXT<input id="compositionFileInput" type="file" accept=".csv,.txt,text/csv,text/plain" style="display:none"></label>
+      <label class="btn btn-secondary btn-sm composition-import">Importer les photos du trombinoscope<input id="compositionTrombinoscopeInput" type="file" accept="image/jpeg,image/png,image/webp" style="display:none"></label>
+      <p>Import PRONOTE : 5 colonnes, élèves dans l'ordre de lecture. Les photos sont découpées localement sur l'iPad. Vérifie les associations après import ; les noms ne sont pas reconnus automatiquement.</p>
     </details>
     <div class="composition-team-grid">
       ${names.map((name,i)=>'<section class="composition-team"><div class="composition-team-head"><span class="composition-team-number">'+(i+1)+'</span><input aria-label="Nom de l’équipe '+(i+1)+'" data-team-name-index="'+i+'" maxlength="30" value="'+escapeHtml(name)+'"><span class="composition-team-size">'+groups[i].length+' él.</span></div><div class="composition-students">'+(groups[i].length?groups[i].map(entry=>student(entry,i)).join(''):'<p class="composition-empty">Ajoute des élèves à cette équipe</p>')+'</div></section>').join('')}
@@ -3591,7 +3630,8 @@ function getSessionTeamCompositions() {
   if (!isTeamBasedDraft() || !config) return null;
   const roster = getCompositionRoster(), names = getDraftTeamNames(config);
   return names.map((name,team)=>({
-    name, students:roster.filter((_,i)=>Number(state.draft.teamAssignments?.[i])===team && state.draft.teamAssignments?.[i]!==undefined)
+    name, students:roster.filter((_,i)=>Number(state.draft.teamAssignments?.[i])===team && state.draft.teamAssignments?.[i]!==undefined),
+    studentPhotos:Object.fromEntries(roster.filter((_,i)=>Number(state.draft.teamAssignments?.[i])===team && state.draft.teamAssignments?.[i]!==undefined).map(n=>[n,getStudentPhoto(n)]).filter(([,photo])=>Boolean(photo)))
   }));
 }
 function renderLiveTeamCompositions(session) {
@@ -3609,7 +3649,7 @@ function renderLiveTeamCompositions(session) {
   if (!Array.isArray(groups)||!groups.length)return;
   const wasOpen = panel.open;
   panel.innerHTML='<summary style="cursor:pointer;font-weight:700">Compositions des équipes · '+groups.reduce((n,g)=>n+g.students.length,0)+' élèves</summary><div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(170px,1fr));gap:12px;margin-top:12px">'+
-    groups.map(g=>'<div><strong>'+escapeHtml(g.name)+'</strong><div style="font-size:.9rem;line-height:1.7">'+(g.students.length?g.students.map(escapeHtml).join('<br>'):'Aucun élève renseigné')+'</div></div>').join('')+'</div>';
+    groups.map(g=>'<div><strong>'+escapeHtml(g.name)+'</strong><div style="font-size:.9rem;line-height:1.7">'+(g.students.length?g.students.map(n=>'<div class="composition-live-student">'+(g.studentPhotos?.[n]?'<img class="composition-avatar" alt="" src="'+g.studentPhotos[n]+'">':'')+escapeHtml(n)+'</div>').join(''):'Aucun élève renseigné')+'</div></div>').join('')+'</div>';
   panel.open=wasOpen;
 }
 
@@ -6133,6 +6173,7 @@ function handleGlobalSubmit(event) {
 
 function handleGlobalChange(event) {
   if (event.target.id === 'compositionRoster') {const wasOpen=true;renderTeamComposition();const details=document.getElementById('compositionRosterDetails');if(details)details.open=wasOpen;persistState();return;}
+  if (event.target.id === 'compositionTrombinoscopeInput') {const file=event.target.files?.[0];if(file)importTrombinoscopeImage(file);return;}
   if (event.target.id === 'compositionFileInput') {
     const file=event.target.files?.[0];
     if (!file) return;
